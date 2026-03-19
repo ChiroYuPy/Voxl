@@ -1,0 +1,1 @@
+(name: "Red_Sandstone", model: Some("red_sandstone"), render_type: "opaque", collidable: true)

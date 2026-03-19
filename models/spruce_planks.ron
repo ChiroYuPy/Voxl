@@ -1,0 +1,7 @@
+(name: "spruce_planks",
+    textures: [("texture", "spruce_planks")],
+    elements: [{
+        from: [0, 0, 0],
+        to: [16, 16, 16],
+        faces: [("bottom", (texture: "#texture", enabled: true)), ("east", (texture: "#texture", enabled: true)), ("south", (texture: "#texture", enabled: true)), ("top", (texture: "#texture", enabled: true)), ("north", (texture: "#texture", enabled: true)), ("west", (texture: "#texture", enabled: true))],
+    }], render_type: "opaque", collidable: true)

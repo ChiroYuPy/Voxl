@@ -1,4 +1,0 @@
-name = "Cherry_Log"
-model = "cherry_log"
-render_type = "opaque"
-collidable = true

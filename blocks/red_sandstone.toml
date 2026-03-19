@@ -1,4 +1,0 @@
-name = "Red_Sandstone"
-model = "red_sandstone"
-render_type = "opaque"
-collidable = true

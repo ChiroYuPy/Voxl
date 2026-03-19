@@ -1,0 +1,1 @@
+(name: "Stripped_Mangrove_Log", model: Some("stripped_mangrove_log"), render_type: "opaque", collidable: true)

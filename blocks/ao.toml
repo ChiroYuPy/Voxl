@@ -1,4 +1,0 @@
-name = "Ao Block"
-texture = "white"
-render_type = "invisible"
-collidable = false

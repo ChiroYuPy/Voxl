@@ -1,0 +1,1 @@
+(name: "Gold_Ore", model: Some("gold_ore"), render_type: "opaque", collidable: true)

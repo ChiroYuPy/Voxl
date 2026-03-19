@@ -1,4 +1,0 @@
-name = "Jungle_Planks"
-model = "jungle_planks"
-render_type = "opaque"
-collidable = true

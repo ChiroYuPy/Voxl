@@ -1,0 +1,1 @@
+(name: "Pale_Oak_Log", model: Some("pale_oak_log"), render_type: "opaque", collidable: true)

@@ -1,4 +1,0 @@
-name = "Copper_Ore"
-model = "copper_ore"
-render_type = "opaque"
-collidable = true

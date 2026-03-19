@@ -1,4 +1,0 @@
-name = "Jungle_Log"
-model = "jungle_log"
-render_type = "opaque"
-collidable = true

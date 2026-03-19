@@ -1,4 +1,0 @@
-name = "Stripped_Jungle_Log"
-model = "stripped_jungle_log"
-render_type = "opaque"
-collidable = true

@@ -1,4 +1,0 @@
-name = "Spruce_Planks"
-model = "spruce_planks"
-render_type = "opaque"
-collidable = true

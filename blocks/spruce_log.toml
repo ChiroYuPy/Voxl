@@ -1,4 +1,0 @@
-name = "Spruce_Log"
-model = "spruce_log"
-render_type = "opaque"
-collidable = true

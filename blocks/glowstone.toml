@@ -1,4 +1,0 @@
-name = "Glowstone"
-model = "glowstone"
-render_type = "opaque"
-collidable = true

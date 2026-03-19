@@ -1,4 +1,0 @@
-name = "Coal_Ore"
-model = "coal_ore"
-render_type = "opaque"
-collidable = true

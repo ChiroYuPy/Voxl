@@ -1,0 +1,1 @@
+(name: "Lapis_Ore", model: Some("lapis_ore"), render_type: "opaque", collidable: true)

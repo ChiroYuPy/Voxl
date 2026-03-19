@@ -1,0 +1,1 @@
+(name: "Stripped_Cherry_Log", model: Some("stripped_cherry_log"), render_type: "opaque", collidable: true)

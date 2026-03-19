@@ -1,0 +1,1 @@
+(name: "Acacia_Log", model: Some("acacia_log"), render_type: "opaque", collidable: true)

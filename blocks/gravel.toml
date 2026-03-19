@@ -1,4 +1,0 @@
-name = "Gravel"
-model = "gravel"
-render_type = "opaque"
-collidable = true

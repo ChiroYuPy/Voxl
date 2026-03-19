@@ -1,4 +1,0 @@
-name = "Stone"
-model = "stone"
-render_type = "opaque"
-collidable = true

@@ -1,4 +1,0 @@
-name = "Dark_Oak_Log"
-model = "dark_oak_log"
-render_type = "opaque"
-collidable = true

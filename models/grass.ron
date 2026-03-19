@@ -1,0 +1,7 @@
+(name: "grass",
+    textures: [("top", "grass_top"), ("side", "grass_side"), ("bottom", "dirt")],
+    elements: [{
+        from: [0, 0, 0],
+        to: [16, 16, 16],
+        faces: [("bottom", (texture: "#bottom", enabled: true)), ("north", (texture: "#side", enabled: true)), ("top", (texture: "#top", enabled: true)), ("west", (texture: "#side", enabled: true)), ("south", (texture: "#side", enabled: true)), ("east", (texture: "#side", enabled: true))],
+    }], render_type: "opaque", collidable: true)

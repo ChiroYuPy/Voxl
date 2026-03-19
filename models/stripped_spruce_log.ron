@@ -1,0 +1,7 @@
+(name: "stripped_spruce_log",
+    textures: [("side", "stripped_spruce_log"), ("top", "stripped_spruce_log"), ("bottom", "stripped_spruce_log_top")],
+    elements: [{
+        from: [0, 0, 0],
+        to: [16, 16, 16],
+        faces: [("top", (texture: "#top", enabled: true)), ("west", (texture: "#side", enabled: true)), ("bottom", (texture: "#bottom", enabled: true)), ("south", (texture: "#side", enabled: true)), ("east", (texture: "#side", enabled: true)), ("north", (texture: "#side", enabled: true))],
+    }], render_type: "opaque", collidable: true)

@@ -1,0 +1,1 @@
+(name: "Diamond_Block", model: Some("diamond_block"), render_type: "opaque", collidable: true)

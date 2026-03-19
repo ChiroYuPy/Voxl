@@ -1,0 +1,1 @@
+(name: "Gravel", model: Some("gravel"), render_type: "opaque", collidable: true)

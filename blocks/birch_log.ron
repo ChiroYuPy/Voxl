@@ -1,0 +1,1 @@
+(name: "Birch_Log", model: Some("birch_log"), render_type: "opaque", collidable: true)

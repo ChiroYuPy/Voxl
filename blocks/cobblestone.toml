@@ -1,4 +1,0 @@
-name = "Cobblestone"
-model = "cobblestone"
-render_type = "opaque"
-collidable = true

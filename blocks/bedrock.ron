@@ -1,0 +1,1 @@
+(name: "Bedrock", model: Some("bedrock"), render_type: "opaque", collidable: true)

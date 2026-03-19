@@ -1,4 +1,0 @@
-name = "Smooth_Stone"
-model = "smooth_stone"
-render_type = "opaque"
-collidable = true

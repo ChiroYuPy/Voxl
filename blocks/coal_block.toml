@@ -1,4 +1,0 @@
-name = "Coal_Block"
-model = "coal_block"
-render_type = "opaque"
-collidable = true

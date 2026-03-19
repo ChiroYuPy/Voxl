@@ -1,0 +1,7 @@
+(name: "pillar",
+    textures: [("side", "stone"), ("top", "stone")],
+    elements: [{
+        from: [6, 0, 6],
+        to: [10, 16, 10],
+        faces: [("north", (texture: "#side", enabled: true)), ("bottom", (texture: "#top", enabled: true)), ("south", (texture: "#side", enabled: true)), ("top", (texture: "#top", enabled: true)), ("east", (texture: "#side", enabled: true)), ("west", (texture: "#side", enabled: true))],
+    }], render_type: "opaque", collidable: true)

@@ -1,0 +1,1 @@
+(name: "Netherite_Block", model: Some("netherite_block"), render_type: "opaque", collidable: true)

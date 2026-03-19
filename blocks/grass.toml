@@ -1,4 +1,0 @@
-name = "Grass"
-model = "grass"
-render_type = "opaque"
-collidable = true

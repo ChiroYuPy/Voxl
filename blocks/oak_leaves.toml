@@ -1,4 +1,0 @@
-name = "Oak_Leaves"
-model = "oak_leaves"
-render_type = "opaque"
-collidable = true

@@ -1,0 +1,1 @@
+(name: "Mossy_Stone_Bricks", model: Some("mossy_stone_bricks"), render_type: "opaque", collidable: true)

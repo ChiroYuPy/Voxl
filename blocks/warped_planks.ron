@@ -1,0 +1,1 @@
+(name: "Warped_Planks", model: Some("warped_planks"), render_type: "opaque", collidable: true)

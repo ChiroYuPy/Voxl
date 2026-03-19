@@ -1,0 +1,7 @@
+(name: "pale_oak_log",
+    textures: [("side", "pale_oak_log"), ("top", "pale_oak_log"), ("bottom", "pale_oak_log_top")],
+    elements: [{
+        from: [0, 0, 0],
+        to: [16, 16, 16],
+        faces: [("south", (texture: "#side", enabled: true)), ("west", (texture: "#side", enabled: true)), ("top", (texture: "#top", enabled: true)), ("east", (texture: "#side", enabled: true)), ("bottom", (texture: "#bottom", enabled: true)), ("north", (texture: "#side", enabled: true))],
+    }], render_type: "opaque", collidable: true)

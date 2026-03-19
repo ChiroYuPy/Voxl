@@ -1,4 +1,0 @@
-name = "Blackstone"
-model = "blackstone"
-render_type = "opaque"
-collidable = true

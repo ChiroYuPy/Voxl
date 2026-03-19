@@ -80,7 +80,7 @@ pub type GlobalVoxelId = usize;
 /// Identifiant de voxel sous forme de chaîne (ex: "grass", "dirt")
 pub type VoxelStringId = String;
 
-/// Configuration d'un block depuis un fichier TOML
+/// Configuration d'un block depuis un fichier RON
 #[derive(Debug, Deserialize, Clone)]
 pub struct BlockConfig {
     /// Nom affichable du block
@@ -308,12 +308,12 @@ impl VoxelRegistry {
             return Err("Blocks folder not found".to_string());
         }
 
-        // Lire tous les fichiers .toml du dossier blocks
+        // Lire tous les fichiers .ron du dossier blocks
         let mut entries: Vec<_> = fs::read_dir(blocks_dir)
             .map_err(|e| format!("Failed to read blocks folder: {}", e))?
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
-                entry.path().extension().map_or(false, |ext| ext == "toml")
+                entry.path().extension().map_or(false, |ext| ext == "ron")
             })
             .collect();
 
@@ -335,11 +335,11 @@ impl VoxelRegistry {
                 continue;
             }
 
-            // Lire et parser le fichier TOML
+            // Lire et parser le fichier RON
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
 
-            let config: BlockConfig = toml::from_str(&content)
+            let config: BlockConfig = ron::from_str(&content)
                 .map_err(|e| format!("Failed to parse {:?}: {}", path, e))?;
 
             // Si le bloc utilise un modèle, ajouter les textures du modèle

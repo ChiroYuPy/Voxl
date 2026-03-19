@@ -35,6 +35,13 @@ impl<'de> Deserialize<'de> for VoxelFace {
             where
                 E: serde::de::Error,
             {
+                self.visit_string(value.to_string())
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
                 match value.to_lowercase().as_str() {
                     "top"    => Ok(VoxelFace::Top),
                     "bottom" => Ok(VoxelFace::Bottom),
@@ -47,7 +54,8 @@ impl<'de> Deserialize<'de> for VoxelFace {
             }
         }
 
-        deserializer.deserialize_str(VoxelFaceVisitor)
+        // Use deserialize_any instead of deserialize_str for better RON compatibility
+        deserializer.deserialize_any(VoxelFaceVisitor)
     }
 }
 

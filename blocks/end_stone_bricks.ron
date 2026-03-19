@@ -1,0 +1,1 @@
+(name: "End_Stone_Bricks", model: Some("end_stone_bricks"), render_type: "opaque", collidable: true)

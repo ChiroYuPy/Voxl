@@ -1,0 +1,1 @@
+(name: "Redstone_Block", model: Some("redstone_block"), render_type: "opaque", collidable: true)

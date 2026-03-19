@@ -1,0 +1,7 @@
+(name: "stripped_mangrove_log",
+    textures: [("side", "stripped_mangrove_log"), ("top", "stripped_mangrove_log"), ("bottom", "stripped_mangrove_log_top")],
+    elements: [{
+        from: [0, 0, 0],
+        to: [16, 16, 16],
+        faces: [("west", (texture: "#side", enabled: true)), ("east", (texture: "#side", enabled: true)), ("top", (texture: "#top", enabled: true)), ("south", (texture: "#side", enabled: true)), ("bottom", (texture: "#bottom", enabled: true)), ("north", (texture: "#side", enabled: true))],
+    }], render_type: "opaque", collidable: true)

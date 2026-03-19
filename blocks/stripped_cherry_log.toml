@@ -1,4 +1,0 @@
-name = "Stripped_Cherry_Log"
-model = "stripped_cherry_log"
-render_type = "opaque"
-collidable = true

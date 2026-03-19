@@ -126,9 +126,9 @@ pub struct ModelElement {
     /// Bounds du cuboid [0-16]
     #[serde(flatten)]
     pub bounds: ElementBounds,
-    /// Faces de l'élément (clé: VoxelFace)
+    /// Faces de l'élément (liste de (face, face_def))
     #[serde(default)]
-    pub faces: HashMap<VoxelFace, ElementFace>,
+    pub faces: Vec<(VoxelFace, ElementFace)>,
 }
 
 /// Élément résolu avec IDs de texture (utilisé pour le rendu)
@@ -143,14 +143,18 @@ pub struct ResolvedModelElement {
 impl ModelElement {
     /// Retourne true si une face est activée pour cet élément
     pub fn has_face(&self, face: VoxelFace) -> bool {
-        self.faces.get(&face)
-            .map(|f| f.enabled)
+        self.faces.iter()
+            .find(|(f, _)| *f == face)
+            .map(|(_, ef)| ef.enabled)
             .unwrap_or(false)
     }
 
     /// Retourne la définition d'une face si elle existe
     pub fn get_face(&self, face: VoxelFace) -> Option<&ElementFace> {
-        self.faces.get(&face).filter(|f| f.enabled)
+        self.faces.iter()
+            .find(|(f, _)| *f == face)
+            .map(|(_, ef)| ef)
+            .filter(|ef| ef.enabled)
     }
 }
 
@@ -163,7 +167,7 @@ pub struct BlockModel {
     /// Liste des textures référencées (noms des fichiers texture sans extension)
     /// Peut inclure des références comme "#texture" pour pointer vers d'autres textures du modèle
     #[serde(default)]
-    pub textures: HashMap<String, String>,
+    pub textures: Vec<(String, String)>,
 
     /// Liste des éléments (cuboids) composant le modèle
     #[serde(default)]
@@ -199,18 +203,14 @@ impl BlockModel {
         let texture = texture.into();
         let name = name.into();
 
-        let mut faces = HashMap::new();
-        for face in VoxelFace::ALL {
-            faces.insert(face, ElementFace::new("#texture".to_string()));
-        }
+        let faces: Vec<(VoxelFace, ElementFace)> = VoxelFace::ALL
+            .iter()
+            .map(|&face| (face, ElementFace::new("#texture".to_string())))
+            .collect();
 
         Self {
             name,
-            textures: {
-                let mut map = HashMap::new();
-                map.insert("texture".to_string(), texture);
-                map
-            },
+            textures: vec![("texture".to_string(), texture)],
             elements: vec![ModelElement {
                 bounds: ElementBounds { from: [0.0, 0.0, 0.0], to: [16.0, 16.0, 16.0] },
                 faces,
@@ -224,7 +224,9 @@ impl BlockModel {
     pub fn resolve_texture(&self, reference: &str) -> Option<String> {
         if reference.starts_with('#') {
             let key = &reference[1..];
-            self.textures.get(key).cloned()
+            self.textures.iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
         } else {
             Some(reference.to_string())
         }
@@ -235,7 +237,7 @@ impl BlockModel {
         let mut textures = Vec::new();
 
         for element in &self.elements {
-            for face_def in element.faces.values() {
+            for (_, face_def) in &element.faces {
                 if face_def.enabled {
                     if let Some(tex) = self.resolve_texture(&face_def.texture) {
                         if !textures.contains(&tex) {
@@ -316,7 +318,7 @@ impl ModelLoader {
             .map_err(|e| format!("Failed to read models folder: {}", e))?
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
-                entry.path().extension().map_or(false, |ext| ext == "toml")
+                entry.path().extension().map_or(false, |ext| ext == "ron")
             })
             .collect();
 
@@ -333,7 +335,7 @@ impl ModelLoader {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
 
-            let mut model: BlockModel = toml::from_str(&content)
+            let mut model: BlockModel = ron::from_str(&content)
                 .map_err(|e| format!("Failed to parse {:?}: {}", path, e))?;
 
             model.name = file_name.to_string();

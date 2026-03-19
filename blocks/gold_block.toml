@@ -1,4 +1,0 @@
-name = "Gold_Block"
-model = "gold_block"
-render_type = "opaque"
-collidable = true

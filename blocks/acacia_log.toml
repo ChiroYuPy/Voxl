@@ -1,4 +1,0 @@
-name = "Acacia_Log"
-model = "acacia_log"
-render_type = "opaque"
-collidable = true

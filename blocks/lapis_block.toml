@@ -1,4 +1,0 @@
-name = "Lapis_Block"
-model = "lapis_block"
-render_type = "opaque"
-collidable = true

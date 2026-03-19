@@ -1,4 +1,0 @@
-name = "Mangrove_Log"
-model = "mangrove_log"
-render_type = "opaque"
-collidable = true

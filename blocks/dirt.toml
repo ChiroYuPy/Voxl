@@ -1,4 +1,0 @@
-name = "Dirt"
-model = "dirt"
-render_type = "opaque"
-collidable = true

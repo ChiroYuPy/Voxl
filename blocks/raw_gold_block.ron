@@ -1,0 +1,1 @@
+(name: "Raw_Gold_Block", model: Some("raw_gold_block"), render_type: "opaque", collidable: true)

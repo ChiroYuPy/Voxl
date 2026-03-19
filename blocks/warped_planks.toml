@@ -1,4 +1,0 @@
-name = "Warped_Planks"
-model = "warped_planks"
-render_type = "opaque"
-collidable = true

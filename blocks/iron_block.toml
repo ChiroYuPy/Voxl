@@ -1,4 +1,0 @@
-name = "Iron_Block"
-model = "iron_block"
-render_type = "opaque"
-collidable = true

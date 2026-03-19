@@ -1,4 +1,0 @@
-name = "Oak_Log"
-model = "oak_log"
-render_type = "opaque"
-collidable = true

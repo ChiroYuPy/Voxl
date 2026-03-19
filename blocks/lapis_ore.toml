@@ -1,4 +1,0 @@
-name = "Lapis_Ore"
-model = "lapis_ore"
-render_type = "opaque"
-collidable = true

@@ -1,4 +1,0 @@
-name = "Redstone_Ore"
-model = "redstone_ore"
-render_type = "opaque"
-collidable = true

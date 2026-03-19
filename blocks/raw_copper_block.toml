@@ -1,4 +1,0 @@
-name = "Raw_Copper_Block"
-model = "raw_copper_block"
-render_type = "opaque"
-collidable = true

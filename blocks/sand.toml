@@ -1,4 +1,0 @@
-name = "Sand"
-model = "sand"
-render_type = "opaque"
-collidable = true

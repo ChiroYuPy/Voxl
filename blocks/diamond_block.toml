@@ -1,4 +1,0 @@
-name = "Diamond_Block"
-model = "diamond_block"
-render_type = "opaque"
-collidable = true

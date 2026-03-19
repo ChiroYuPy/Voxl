@@ -1,4 +1,0 @@
-name = "Cracked_Stone_Bricks"
-model = "cracked_stone_bricks"
-render_type = "opaque"
-collidable = true

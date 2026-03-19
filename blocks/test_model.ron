@@ -1,0 +1,1 @@
+(name: "Test Model Block", model: Some("slab"), render_type: "opaque", collidable: true)

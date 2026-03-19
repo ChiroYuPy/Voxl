@@ -1,0 +1,7 @@
+(name: "copper_block",
+    textures: [("texture", "copper_block")],
+    elements: [{
+        from: [0, 0, 0],
+        to: [16, 16, 16],
+        faces: [("north", (texture: "#texture", enabled: true)), ("east", (texture: "#texture", enabled: true)), ("west", (texture: "#texture", enabled: true)), ("top", (texture: "#texture", enabled: true)), ("south", (texture: "#texture", enabled: true)), ("bottom", (texture: "#texture", enabled: true))],
+    }], render_type: "opaque", collidable: true)

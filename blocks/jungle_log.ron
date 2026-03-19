@@ -1,0 +1,1 @@
+(name: "Jungle_Log", model: Some("jungle_log"), render_type: "opaque", collidable: true)

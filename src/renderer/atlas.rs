@@ -158,7 +158,7 @@ pub fn load_block_configs(
         .map_err(|e| format!("Failed to read blocks folder: {}", e))?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry.path().extension().map_or(false, |ext| ext == "toml")
+            entry.path().extension().map_or(false, |ext| ext == "ron")
         })
         .collect();
 
@@ -181,7 +181,7 @@ pub fn load_block_configs(
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
 
-        let config: crate::voxel::BlockConfig = toml::from_str(&content)
+        let config: crate::voxel::BlockConfig = ron::from_str(&content)
             .map_err(|e| format!("Failed to parse {:?}: {}", path, e))?;
 
         blocks.push((string_id, config));
