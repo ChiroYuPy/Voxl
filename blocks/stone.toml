@@ -1,5 +1,4 @@
 name = "Stone"
 texture = "stone"
-
-solid = true
-transparent = false
+render_type = "opaque"
+collidable = true

@@ -1,4 +1,4 @@
 name = "Pierre Noire Polie"
 texture = "polished_blackstone"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

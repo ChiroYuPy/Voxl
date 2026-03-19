@@ -2,5 +2,5 @@ name = "Buche d'Acacia"
 texture = "acacia_log_top"
 texture_side = "acacia_log"
 texture_bottom = "acacia_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

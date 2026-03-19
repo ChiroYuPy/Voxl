@@ -1,4 +1,4 @@
 name = "Planches de Carmin"
 texture = "crimson_planks"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

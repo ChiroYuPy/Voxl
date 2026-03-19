@@ -1,4 +1,4 @@
 name = "Bloc de Diamant"
 texture = "diamond_block"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

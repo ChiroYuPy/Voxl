@@ -115,6 +115,9 @@ impl NeighborData {
 pub struct AoCalculator;
 
 impl AoCalculator {
+    /// Intensité de l'AO (0.0 = pas d'AO, 1.0 = AO maximale)
+    pub const INTENSITY: f32 = 0.7;
+
     /// Calcule les valeurs d'AO pour les 4 coins d'une face
     ///
     /// IMPORTANT: Les voisins sont vérifiés depuis la position de la FACE (bloc + normale),
@@ -127,7 +130,15 @@ impl AoCalculator {
     ///
     /// # Retourne
     /// Un tableau de 4 valeurs d'AO [coin0, coin1, coin2, coin3]
-    pub fn calculate_face<F>(block_pos: IVec3, face: VoxelFace, mut get_voxel: F) -> [f32; 4]
+    pub fn calculate_face<F>(block_pos: IVec3, face: VoxelFace, get_voxel: F) -> [f32; 4]
+    where
+        F: FnMut(i32, i32, i32) -> Option<GlobalVoxelId>,
+    {
+        Self::calculate_face_with_intensity(block_pos, face, get_voxel, Self::INTENSITY)
+    }
+
+    /// Calcule les valeurs d'AO avec une intensité spécifique
+    pub fn calculate_face_with_intensity<F>(block_pos: IVec3, face: VoxelFace, mut get_voxel: F, intensity: f32) -> [f32; 4]
     where
         F: FnMut(i32, i32, i32) -> Option<GlobalVoxelId>,
     {
@@ -155,9 +166,14 @@ impl AoCalculator {
             let side2_blocks = Self::is_opaque(side2_pos, &mut get_voxel);
             let corner_blocks = Self::is_opaque(corner_pos, &mut get_voxel);
 
-            // Calculer l'AO pour ce coin
+            // Calculer l'AO brute pour ce coin
             let ao = AoLevel::from_neighbors(side1_blocks, side2_blocks, corner_blocks);
-            ao_values[corner_idx] = ao.as_f32();
+
+            // Appliquer l'intensité: lerp entre 1.0 (pas d'AO) et la valeur calculée
+            // intensity = 0 → toujours 1.0 (pas d'AO)
+            // intensity = 1 → valeur calculée (AO complète)
+            let ao_value = 1.0 - (1.0 - ao.as_f32()) * intensity;
+            ao_values[corner_idx] = ao_value;
         }
 
         ao_values

@@ -2,5 +2,5 @@ name = "Buche de Bouleau"
 texture = "birch_log_top"
 texture_side = "birch_log"
 texture_bottom = "birch_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

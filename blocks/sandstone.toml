@@ -1,4 +1,4 @@
 name = "Grès"
 texture = "sandstone"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

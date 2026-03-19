@@ -2,9 +2,77 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::RwLock;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde::de::Visitor;
+use std::fmt;
 
 use crate::voxel::face::VoxelFace;
+
+/// Type de rendu d'un bloc - détermine comment les faces adjacentes sont traitées
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RenderType {
+    /// Bloc complètement opaque (cache les faces adjacentes)
+    Opaque,
+    /// Bloc transparent mais solide (verre, glace) - ne cache pas les faces adjacentes
+    Transparent,
+    /// Bloc avec découpe alpha (feuilles, herbes) - ne cache pas les faces adjacentes
+    Cutout,
+    /// Bloc translucide avec blending (eau, verre teinté) - ne cache pas les faces adjacentes
+    Translucent,
+    /// Bloc qui n'est jamais rendu (air, triggers)
+    Invisible,
+}
+
+impl Default for RenderType {
+    fn default() -> Self {
+        Self::Opaque
+    }
+}
+
+impl<'de> Deserialize<'de> for RenderType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RenderTypeVisitor;
+
+        impl<'de> Visitor<'de> for RenderTypeVisitor {
+            type Value = RenderType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a string representing render type: opaque, transparent, cutout, translucent, or invisible")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value.to_lowercase().as_str() {
+                    "opaque" => Ok(RenderType::Opaque),
+                    "transparent" => Ok(RenderType::Transparent),
+                    "cutout" => Ok(RenderType::Cutout),
+                    "translucent" => Ok(RenderType::Translucent),
+                    "invisible" => Ok(RenderType::Invisible),
+                    other => Err(E::custom(format!("unknown render type: {}", other))),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(RenderTypeVisitor)
+    }
+}
+
+impl RenderType {
+    /// Retourne true si le bloc cache les faces adjacentes (culling)
+    pub fn culls_adjacent_faces(&self) -> bool {
+        matches!(self, Self::Opaque)
+    }
+
+    /// Retourne true si le bloc est visible
+    pub fn is_visible(&self) -> bool {
+        !matches!(self, Self::Invisible)
+    }
+}
 
 /// Identifiant global d'un voxel (0 = air/vide)
 pub type GlobalVoxelId = usize;
@@ -25,16 +93,15 @@ pub struct BlockConfig {
     /// Texture pour le dessous (optionnel, utilise "texture" par défaut)
     #[serde(default)]
     pub texture_bottom: Option<String>,
-    /// Est-ce un block solide (peut être marché dessus)
-    #[serde(default = "default_solid")]
-    pub solid: bool,
-    /// Est-ce que le block est transparent (la lumière traverse)
-    #[serde(default = "default_transparent")]
-    pub transparent: bool,
+    /// Type de rendu du bloc (opaque, transparent, cutout, translucent, invisible)
+    #[serde(default)]
+    pub render_type: RenderType,
+    /// Est-ce que le bloc est solide (collision)
+    #[serde(default = "default_collidable")]
+    pub collidable: bool,
 }
 
-fn default_solid() -> bool { true }
-fn default_transparent() -> bool { false }
+fn default_collidable() -> bool { true }
 
 /// Coordonnées UV pour une texture dans l'atlas
 #[derive(Clone, Copy, Debug)]
@@ -73,10 +140,10 @@ pub struct VoxelDefinition {
     pub uv_side: TextureUV,
     /// Coordonnées UV pour la texture du dessous
     pub uv_bottom: TextureUV,
-    /// Est-ce un block solide
-    pub solid: bool,
-    /// Est-ce que le block est transparent
-    pub transparent: bool,
+    /// Type de rendu du bloc
+    pub render_type: RenderType,
+    /// Est-ce que le bloc est solide (collision)
+    pub collidable: bool,
 }
 
 impl VoxelDefinition {
@@ -119,8 +186,8 @@ impl VoxelRegistry {
             uv_top: uv_air,
             uv_side: uv_air,
             uv_bottom: uv_air,
-            solid: false,
-            transparent: true,
+            render_type: RenderType::Invisible,
+            collidable: false,
         });
         registry
     }
@@ -202,8 +269,8 @@ impl VoxelRegistry {
                 uv_top,
                 uv_side,
                 uv_bottom,
-                solid: config.solid,
-                transparent: config.transparent,
+                render_type: config.render_type,
+                collidable: config.collidable,
             });
             println!("Registered block '{}' (ID: {})", string_id, self.definitions.len() - 1);
         }
@@ -237,8 +304,8 @@ impl VoxelRegistry {
             uv_top: uv,
             uv_side: uv,
             uv_bottom: uv,
-            solid: true,
-            transparent: false,
+            render_type: RenderType::Opaque,
+            collidable: true,
         })
     }
 
@@ -263,14 +330,24 @@ impl VoxelRegistry {
         global_id == 0
     }
 
-    /// Retourne true si le block est solide
+    /// Retourne true si le block est solide (propriété physique)
     pub fn is_solid(&self, global_id: GlobalVoxelId) -> bool {
-        self.get(global_id).map_or(false, |d| d.solid)
+        self.get(global_id).map_or(false, |d| d.collidable)
     }
 
-    /// Retourne true si le block est transparent
-    pub fn is_transparent(&self, global_id: GlobalVoxelId) -> bool {
-        self.get(global_id).map_or(true, |d| d.transparent)
+    /// Retourne true si le block est opaque (propriété graphique - pour culling)
+    pub fn is_opaque(&self, global_id: GlobalVoxelId) -> bool {
+        self.get(global_id).map_or(false, |d| d.render_type.culls_adjacent_faces())
+    }
+
+    /// Retourne le type de rendu du block
+    pub fn get_render_type(&self, global_id: GlobalVoxelId) -> RenderType {
+        self.get(global_id).map_or(RenderType::Invisible, |d| d.render_type)
+    }
+
+    /// Retourne true si le block est solide (collision)
+    pub fn is_collidable(&self, global_id: GlobalVoxelId) -> bool {
+        self.get(global_id).map_or(false, |d| d.collidable)
     }
 
     /// Retourne le nombre de types de voxels enregistrés
@@ -338,8 +415,16 @@ impl SharedVoxelRegistry {
         self.inner.read().unwrap().is_solid(global_id)
     }
 
-    pub fn is_transparent(&self, global_id: GlobalVoxelId) -> bool {
-        self.inner.read().unwrap().is_transparent(global_id)
+    pub fn is_opaque(&self, global_id: GlobalVoxelId) -> bool {
+        self.inner.read().unwrap().is_opaque(global_id)
+    }
+
+    pub fn get_render_type(&self, global_id: GlobalVoxelId) -> RenderType {
+        self.inner.read().unwrap().get_render_type(global_id)
+    }
+
+    pub fn is_collidable(&self, global_id: GlobalVoxelId) -> bool {
+        self.inner.read().unwrap().is_collidable(global_id)
     }
 
     pub fn len(&self) -> usize {

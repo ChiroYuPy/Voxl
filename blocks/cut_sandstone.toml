@@ -1,4 +1,4 @@
 name = "Grès Taillé"
 texture = "cut_sandstone"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

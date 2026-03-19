@@ -1,4 +1,4 @@
 name = "Minerai d'Or"
 texture = "gold_ore"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

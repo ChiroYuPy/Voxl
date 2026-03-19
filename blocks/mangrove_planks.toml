@@ -1,4 +1,4 @@
 name = "Planches de Mangrove"
 texture = "mangrove_planks"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

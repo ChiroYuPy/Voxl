@@ -1,4 +1,4 @@
 name = "Pierre Lumineuse"
 texture = "glowstone"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

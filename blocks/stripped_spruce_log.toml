@@ -1,4 +1,4 @@
 name = "Buche de Sapin Écorcée"
 texture = "stripped_spruce_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

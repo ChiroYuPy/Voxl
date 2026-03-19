@@ -1,8 +1,8 @@
-use crate::voxel::{VoxelChunk, CHUNK_SIZE, VoxelWorld, GlobalVoxelId, SharedVoxelRegistry, WORLD_HEIGHT};
+use crate::voxel::{VoxelChunk, CHUNK_SIZE, VoxelWorld, GlobalVoxelId, SharedVoxelRegistry, RenderType};
 use crate::voxel::face::TriangleDiagonal;
 use super::{VoxelFace, AoCalculator};
 use glam::{IVec3, Vec3};
-use glam::FloatExt;  // Pour la méthode lerp sur f32
+use glam::FloatExt;
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -11,28 +11,119 @@ pub struct VoxelVertex {
     pub normal: [f32; 3],
     pub voxel_pos: [i32; 3],
     pub uv: [f32; 2],
-    pub color: [f32; 4],  // RGBA - couleur calculée sur CPU (light * AO)
+    pub color: [f32; 4],
 }
 
-/// Direction de la lumière (normalisée à la main pour const)
-const LIGHT_DIR: Vec3 = Vec3::new(0.4472136, 0.8944272, 0.0);  // normalize(0.5, 1.0, 0.3)
-
-/// Intensité de lumière ambiante
+const LIGHT_DIR: Vec3 = Vec3::new(0.4472136, 0.8944272, 0.0);
 const AMBIENT_STRENGTH: f32 = 0.3;
-
-/// Intensité maximale de lumière diffuse
 const DIFFUSE_STRENGTH: f32 = 0.7;
 
-pub fn is_face_visible_inter<F>(pos: IVec3, face: VoxelFace, mut get_voxel: F) -> bool
-where
-    F: FnMut(i32, i32, i32) -> Option<GlobalVoxelId>,
-{
-    let normal = face.normal();
-    let n_pos = pos + normal;
-    if n_pos.y < 0 || n_pos.y >= WORLD_HEIGHT as i32 {
-        return true;
+/// Référence légère à un voxel pour les calculs de rendu
+#[derive(Clone, Copy, Debug)]
+pub struct VoxelRef {
+    /// ID global du voxel (0 = air)
+    pub id: GlobalVoxelId,
+    /// Type de rendu du bloc
+    pub render_type: RenderType,
+    /// Est-ce que le bloc est solide (collision)
+    pub collidable: bool,
+}
+
+impl VoxelRef {
+    /// Crée une référence vide (air)
+    pub const AIR: Self = Self {
+        id: 0,
+        render_type: RenderType::Invisible,
+        collidable: false,
+    };
+
+    /// Crée une référence depuis un ID et le registry
+    pub fn from_id(id: GlobalVoxelId, registry: &SharedVoxelRegistry) -> Self {
+        let render_type = registry.get_render_type(id);
+        let collidable = registry.is_collidable(id);
+        Self { id, render_type, collidable }
     }
-    get_voxel(n_pos.x, n_pos.y, n_pos.z).map_or(true, |id| id == 0)
+
+    /// Crée une référence depuis un ID (avec valeurs par défaut si registry pas dispo)
+    pub const fn from_id_unchecked(id: GlobalVoxelId) -> Self {
+        Self {
+            id,
+            render_type: if id == 0 { RenderType::Invisible } else { RenderType::Opaque },
+            collidable: id != 0,
+        }
+    }
+
+    /// Retourne true si c'est de l'air (vide)
+    pub fn is_air(self) -> bool {
+        self.id == 0
+    }
+
+    /// Retourne true si le bloc est opaque (cache les faces adjacentes)
+    pub fn is_opaque(self) -> bool {
+        self.render_type.culls_adjacent_faces()
+    }
+
+    /// Retourne true si c'est un bloc solide (physiquement)
+    pub fn is_solid(self) -> bool {
+        self.collidable
+    }
+
+    /// Retourne true si le bloc est visible
+    pub fn is_visible(self) -> bool {
+        self.render_type.is_visible()
+    }
+}
+
+/// Vérifie si une face doit être rendue en vérifiant l'occlusion avec le bloc voisin.
+///
+/// # Règles de culling (basées sur RenderType):
+/// - Si le voisin est opaque → face cachée (cull)
+/// - Si le voisin est du même type et opaque → face cachée (cull pour éviter les faces internes)
+/// - Si le voisin est invisible (air) → face visible
+///
+/// # Arguments
+/// * `current` - Voxel actuel
+/// * `neighbor` - Voxel voisin dans la direction de la face
+///
+/// # Retourne
+/// `true` si la face doit être rendue, `false` si elle est cachée
+pub fn should_render_face(current: VoxelRef, neighbor: VoxelRef) -> bool {
+    // L'air ne cache jamais les faces
+    if !neighbor.is_visible() { return true; }
+
+    // Les blocs opaques cachent les faces derrière eux
+    if neighbor.is_opaque() { return false; }
+
+    // Si les deux sont du même type opaque, on cull (évite les faces internes)
+    if current.id == neighbor.id && current.is_opaque() {
+        return false;
+    }
+
+    true
+}
+
+/// Contexte d'accès au monde voxel pour la génération de mesh
+pub struct VoxelWorldContext<'a> {
+    pub world: &'a VoxelWorld,
+    pub registry: &'a SharedVoxelRegistry,
+}
+
+impl<'a> VoxelWorldContext<'a> {
+    /// Récupère un voxel par ses coordonnées mondiales
+    pub fn get_voxel(&self, x: i32, y: i32, z: i32) -> VoxelRef {
+        if let Some(id) = self.world.get_voxel_opt(x, y, z) {
+            VoxelRef::from_id(id, self.registry)
+        } else {
+            VoxelRef::AIR
+        }
+    }
+
+    /// Récupère un voxel par sa position relative (chunk + local)
+    pub fn get_voxel_chunk_local(&self, cx: i32, cy: i32, cz: i32, lx: u32, ly: u32, lz: u32) -> VoxelRef {
+        self.world.get_chunk_existing(cx, cy, cz)
+            .and_then(|chunk| chunk.get(lx, ly, lz))
+            .map_or(VoxelRef::AIR, |id| VoxelRef::from_id(id, self.registry))
+    }
 }
 
 pub fn generate_chunk_mesh(
@@ -59,20 +150,7 @@ pub fn generate_chunk_mesh_with_diagonal(
     let mut vertices = Vec::new();
     let chunk_offset = IVec3::new(cx * CHUNK_SIZE as i32, cy * CHUNK_SIZE as i32, cz * CHUNK_SIZE as i32);
 
-    let get_voxel = |wx: i32, wy: i32, wz: i32| -> Option<GlobalVoxelId> {
-        let cx = wx.div_euclid(CHUNK_SIZE as i32);
-        let cy = wy.div_euclid(CHUNK_SIZE as i32);
-        let cz = wz.div_euclid(CHUNK_SIZE as i32);
-        let x = wx.rem_euclid(CHUNK_SIZE as i32) as u32;
-        let y = wy.rem_euclid(CHUNK_SIZE as i32) as u32;
-        let z = wz.rem_euclid(CHUNK_SIZE as i32) as u32;
-
-        if let Some(chunk) = world.get_chunk_existing(cx, cy, cz) {
-            chunk.get(x, y, z)
-        } else {
-            None
-        }
-    };
+    let context = VoxelWorldContext { world, registry };
 
     for x in 0..CHUNK_SIZE {
         for y in 0..CHUNK_SIZE {
@@ -86,10 +164,14 @@ pub fn generate_chunk_mesh_with_diagonal(
                 }
 
                 let world_pos = chunk_offset + IVec3::new(x as i32, y as i32, z as i32);
+                let current_voxel = VoxelRef::from_id(id, registry);
 
                 for face in VoxelFace::ALL {
-                    if is_face_visible_inter(world_pos, face, &get_voxel) {
-                        add_face(&mut vertices, world_pos, face, id, registry, &get_voxel, diagonal);
+                    let neighbor_pos = world_pos + face.normal();
+                    let neighbor = context.get_voxel(neighbor_pos.x, neighbor_pos.y, neighbor_pos.z);
+
+                    if should_render_face(current_voxel, neighbor) {
+                        add_face(&mut vertices, world_pos, face, id, registry, &context, diagonal);
                     }
                 }
             }
@@ -99,16 +181,13 @@ pub fn generate_chunk_mesh_with_diagonal(
     vertices
 }
 
-/// Calcule les valeurs d'AO pour les 4 coins d'une face
-/// Le résultat est dans l'ordre: [coin0, coin1, coin2, coin3]
-fn calculate_face_ao<F>(world_pos: IVec3, face: VoxelFace, get_voxel: F) -> [f32; 4]
-where
-    F: FnMut(i32, i32, i32) -> Option<GlobalVoxelId>,
-{
-    AoCalculator::calculate_face(world_pos, face, get_voxel)
+fn calculate_face_ao(context: &VoxelWorldContext, world_pos: IVec3, face: VoxelFace) -> [f32; 4] {
+    AoCalculator::calculate_face(world_pos, face, |x, y, z| {
+        let v = context.get_voxel(x, y, z);
+        if v.is_air() { None } else { Some(v.id) }
+    })
 }
 
-/// Calcule la lumière (ambient + diffuse) pour une face donnée
 fn calculate_face_light(face: VoxelFace) -> f32 {
     let normal = face.normal();
     let normal_vec = Vec3::new(normal.x as f32, normal.y as f32, normal.z as f32);
@@ -116,17 +195,15 @@ fn calculate_face_light(face: VoxelFace) -> f32 {
     AMBIENT_STRENGTH + diffuse
 }
 
-fn add_face<F>(
+fn add_face(
     vertices: &mut Vec<VoxelVertex>,
     pos: IVec3,
     face: VoxelFace,
     global_id: GlobalVoxelId,
     registry: &SharedVoxelRegistry,
-    get_voxel: &F,
+    context: &VoxelWorldContext,
     diagonal: TriangleDiagonal,
-) where
-    F: Fn(i32, i32, i32) -> Option<GlobalVoxelId>,
-{
+) {
     let normal = face.normal_f32();
     let voxel_pos = [pos.x, pos.y, pos.z];
     let (uv_offset_x, uv_offset_y) = registry
@@ -140,25 +217,15 @@ fn add_face<F>(
         .and_then(|def| Some(def.uv_top.size_in_atlas))
         .unwrap_or(0.5);
 
-    // Obtenir les UV du quad pour l'interpolation de l'AO
     let quad_uvs = face.quad_uvs();
-
-    // Calculer l'AO pour les 4 coins de la face
-    // Ordre: coin0=(1,1), coin1=(0,1), coin2=(0,0), coin3=(1,0)
-    let corner_ao = calculate_face_ao(pos, face, get_voxel);
-
-    // Calculer la lumière pour cette face
+    let corner_ao = calculate_face_ao(context, pos, face);
     let light = calculate_face_light(face);
 
-    // Pour chaque vertex, calculer la couleur finale (light * AO)
     for i in 0..6 {
         let base_uv = face_uvs[i];
         let uv = [uv_offset_x + base_uv[0] * texture_size, uv_offset_y + base_uv[1] * texture_size];
 
-        // Trouver l'AO pour ce vertex en interpolant selon les UV du quad
         let ao = interpolate_ao_for_vertex(corner_ao, quad_uvs, base_uv);
-
-        // Couleur finale = lumière * AO (le shader multipliera par la texture)
         let final_light = light * ao;
 
         vertices.push(VoxelVertex {
@@ -166,16 +233,13 @@ fn add_face<F>(
             normal,
             voxel_pos,
             uv,
-            color: [final_light, final_light, final_light, 1.0],  // RGB = même valeur, A = 1.0
+            color: [final_light, final_light, final_light, 1.0],
         });
     }
 }
 
-/// Interpole l'AO pour un vertex donné selon ses UV
-/// Les corner_ao sont dans l'ordre: [coin0=(1,1), coin1=(0,1), coin2=(0,0), coin3=(1,0)]
 fn interpolate_ao_for_vertex(corner_ao: [f32; 4], _quad_uvs: [[f32; 2]; 4], vertex_uv: [f32; 2]) -> f32 {
-    // Interpolation bilinéaire comme dans le shader
-    let top = corner_ao[0].lerp(corner_ao[1], 1.0 - vertex_uv[0]);  // coin0 vers coin1
-    let bottom = corner_ao[3].lerp(corner_ao[2], 1.0 - vertex_uv[0]);  // coin3 vers coin2
-    top.lerp(bottom, 1.0 - vertex_uv[1])  // top vers bottom
+    let top = corner_ao[0].lerp(corner_ao[1], 1.0 - vertex_uv[0]);
+    let bottom = corner_ao[3].lerp(corner_ao[2], 1.0 - vertex_uv[0]);
+    top.lerp(bottom, 1.0 - vertex_uv[1])
 }

@@ -1,4 +1,4 @@
 name = "Grès Rouge Sculpté"
 texture = "chiseled_red_sandstone"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

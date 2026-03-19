@@ -1,11 +1,6 @@
 name = "Grass"
-
-# Texture file name (must be in assets/textures/)
-# Can use "top", "side", "bottom" for different faces
-# Defaults to using the same texture for all sides if not specified
 texture = "grass_top"
 texture_side = "grass_side"
 texture_bottom = "dirt"
-
-solid = true
-transparent = false
+render_type = "opaque"
+collidable = true

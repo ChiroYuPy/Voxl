@@ -1,4 +1,4 @@
 name = "Bloc de Lapis"
 texture = "lapis_block"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

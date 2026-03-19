@@ -1,4 +1,4 @@
 name = "Buche de Cerisier Écorcée"
 texture = "stripped_cherry_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

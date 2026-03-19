@@ -1,4 +1,4 @@
 name = "Buche de Jungle Écorcée"
 texture = "stripped_jungle_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

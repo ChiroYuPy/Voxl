@@ -2,5 +2,5 @@ name = "Buche de Chêne"
 texture = "oak_log_top"
 texture_side = "oak_log"
 texture_bottom = "oak_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

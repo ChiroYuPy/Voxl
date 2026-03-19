@@ -3,5 +3,5 @@ texture = "pale_oak_log_top"
 texture_side = "pale_oak_log"
 texture_top = "pale_oak_log_top"
 texture_bottom = "pale_oak_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

@@ -1,4 +1,4 @@
 name = "Buche d'Acacia Écorcée"
 texture = "stripped_acacia_log_top"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

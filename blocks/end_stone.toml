@@ -1,4 +1,4 @@
 name = "Pierre de l'End"
 texture = "end_stone"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

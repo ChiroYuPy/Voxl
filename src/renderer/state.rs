@@ -413,16 +413,7 @@ impl WgpuState {
             view_formats: &[],
         });
 
-        let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("Depth Texture View"),
-            format: Some(wgpu::TextureFormat::Depth24PlusStencil8),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            aspect: wgpu::TextureAspect::All,
-            mip_level_count: None,
-            base_mip_level: 0,
-            array_layer_count: None,
-            base_array_layer: 0,
-        });
+        let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Créer le buffer de temps pour l'animation de l'overlay
         let highlight_time_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -774,7 +765,6 @@ impl WgpuState {
             self._surface.configure(&self.device, &self.surface_config);
 
             // Update egui pixels_per_point
-            // Note: in a real app you'd get this from the window, but here we assume 1.0
             self.egui_state.update_pixels_per_point(1.0);
 
             // Recréer le depth buffer avec les nouvelles dimensions
@@ -793,16 +783,7 @@ impl WgpuState {
                 view_formats: &[],
             });
 
-            self.depth_texture_view = self.depth_texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("Depth Texture View"),
-                format: Some(wgpu::TextureFormat::Depth24PlusStencil8),
-                dimension: Some(wgpu::TextureViewDimension::D2),
-                aspect: wgpu::TextureAspect::All,
-                mip_level_count: None,
-                base_mip_level: 0,
-                array_layer_count: None,
-                base_array_layer: 0,
-            });
+            self.depth_texture_view = self.depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
         }
     }
 

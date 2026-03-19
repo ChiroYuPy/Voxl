@@ -1,4 +1,4 @@
 name = "Planches d'Acacia"
 texture = "acacia_planks"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

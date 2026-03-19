@@ -1,4 +1,4 @@
 name = "Bloc d'Émeraude"
 texture = "emerald_block"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true

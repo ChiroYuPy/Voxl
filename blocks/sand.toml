@@ -1,5 +1,4 @@
 name = "Sand"
 texture = "sand"
-
-solid = true
-transparent = false
+render_type = "opaque"
+collidable = true

@@ -1,4 +1,4 @@
 name = "Minerai d'Émeraude"
 texture = "emerald_ore"
-solid = true
-ao = true
+render_type = "opaque"
+collidable = true
