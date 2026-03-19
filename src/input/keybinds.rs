@@ -48,6 +48,9 @@ pub enum GameAction {
 
     ToggleDebugUI,
     OpenChat,
+
+    ToggleFly,
+    CycleGameMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -114,15 +117,17 @@ impl Default for KeyBindings {
         bindings.insert(GameAction::PickBlock, vec![
             InputButton::mouse(2), // Middle click
         ]);
+
+        bindings.insert(GameAction::IncreaseSpeed, vec![
+            InputButton::named(NamedKey::Control),
+        ]);
+
+        // Molette pour changer le bloc
         bindings.insert(GameAction::NextBlockType, vec![
             InputButton::mouse(4), // Molette haut
         ]);
         bindings.insert(GameAction::PreviousBlockType, vec![
             InputButton::mouse(5), // Molette bas
-        ]);
-
-        bindings.insert(GameAction::IncreaseSpeed, vec![
-            InputButton::named(NamedKey::Control),
         ]);
         bindings.insert(GameAction::DecreaseSpeed, vec![
             InputButton::char('-'),
@@ -134,6 +139,16 @@ impl Default for KeyBindings {
 
         bindings.insert(GameAction::OpenChat, vec![
             InputButton::char('t'),
+        ]);
+
+        // Toggle fly avec F
+        bindings.insert(GameAction::ToggleFly, vec![
+            InputButton::char('f'),
+        ]);
+
+        // Cycle gamemode avec G
+        bindings.insert(GameAction::CycleGameMode, vec![
+            InputButton::char('g'),
         ]);
 
         Self { bindings }
@@ -381,7 +396,7 @@ impl InputManager {
     }
 }
 
-const ALL_ACTIONS: [GameAction; 21] = [
+const ALL_ACTIONS: [GameAction; 23] = [
     GameAction::MoveForward,
     GameAction::MoveBackward,
     GameAction::MoveLeft,
@@ -403,4 +418,6 @@ const ALL_ACTIONS: [GameAction; 21] = [
     GameAction::DecreaseSpeed,
     GameAction::ToggleDebugUI,
     GameAction::OpenChat,
+    GameAction::ToggleFly,
+    GameAction::CycleGameMode,
 ];

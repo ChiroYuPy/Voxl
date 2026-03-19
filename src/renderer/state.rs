@@ -4,6 +4,7 @@ use crate::renderer::VoxelVertex;
 use crate::renderer::mesh_system::MeshBuildSystem;
 use crate::terrain::TerrainGenerator;
 use crate::debug::EguiState;
+use crate::entities::EntityWorld;
 use winit::window::Window;
 use glam::{Mat4, Vec3A};
 use wgpu::util::DeviceExt;
@@ -144,6 +145,9 @@ pub struct WgpuState {
     chunk_meshes: HashMap<ChunkPos, ChunkMesh>,
     mesh_rebuild: MeshBuildSystem,
     dirty_chunks: DirtyChunkSet,
+
+    // Monde des entités ECS
+    entity_world: EntityWorld,
 
     // Highlight du bloc visé
     highlight_vertex_buffer: Option<wgpu::Buffer>,
@@ -524,6 +528,13 @@ impl WgpuState {
         // Initialize egui renderer
         let egui_renderer = egui_wgpu::Renderer::new(&device, surface_config.format, None, 1);
 
+        // Créer le monde des entités ECS
+        let mut entity_world = EntityWorld::new();
+        // Spawner le joueur à la position de spawn (même position que la caméra par défaut)
+        let spawn_pos = glam::Vec3::new(0.0, 140.0, 0.0);
+        entity_world.spawn_player(spawn_pos);
+        println!("Player entity spawned at ({}, {}, {})", spawn_pos.x, spawn_pos.y, spawn_pos.z);
+
         Self {
             _instance: instance,
             _surface: surface,
@@ -546,6 +557,7 @@ impl WgpuState {
             chunk_meshes,
             mesh_rebuild,
             dirty_chunks: DirtyChunkSet::new(),
+            entity_world,
             highlight_vertex_buffer: None,
             highlight_face_buffer: None,
             highlight_target: None,
@@ -1000,6 +1012,81 @@ impl WgpuState {
     /// Get a mutable reference to the camera.
     pub fn camera_mut(&mut self) -> &mut Camera {
         &mut self.camera
+    }
+
+    /// Obtenir une référence au monde des entités ECS
+    pub fn entity_world(&self) -> &EntityWorld {
+        &self.entity_world
+    }
+
+    /// Obtenir une référence mutable au monde des entités ECS
+    pub fn entity_world_mut(&mut self) -> &mut EntityWorld {
+        &mut self.entity_world
+    }
+
+    /// Met à jour la caméra depuis l'entité joueur
+    /// Retourne true si la mise à jour a réussi
+    pub fn update_camera_from_player(&mut self) -> bool {
+        let player_entity = match self.entity_world.player_entity() {
+            Some(e) => e,
+            None => return false,
+        };
+
+        use crate::entities::systems::camera_sync_system;
+
+        match camera_sync_system(self.entity_world.world_read(), player_entity) {
+            Some((pos, yaw, pitch)) => {
+                self.camera.position = Vec3A::new(pos.x, pos.y, pos.z);
+                self.camera.yaw = yaw;
+                self.camera.pitch = pitch;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Téléporte le joueur à une position absolue
+    pub fn teleport_player(&mut self, pos: glam::Vec3) {
+        use crate::entities::components::Position;
+
+        if let Some(player_entity) = self.entity_world.player_entity() {
+            let Ok(position) = self.entity_world.world().query_one_mut::<&mut Position>(player_entity) else {
+                return;
+            };
+            position.set(pos);
+            // Mettre aussi à jour la caméra directement
+            self.update_camera_from_player();
+        }
+    }
+
+    /// Téléporte le joueur relativement à sa position actuelle
+    pub fn teleport_player_relative(&mut self, delta: glam::Vec3) {
+        use crate::entities::components::Position;
+
+        if let Some(player_entity) = self.entity_world.player_entity() {
+            let Ok(position) = self.entity_world.world().query_one_mut::<&mut Position>(player_entity) else {
+                return;
+            };
+            let old_pos = position.as_vec3();
+            position.set(old_pos + delta);
+            // Mettre aussi à jour la caméra directement
+            self.update_camera_from_player();
+        }
+    }
+
+    /// Change le mode de jeu du joueur
+    pub fn set_game_mode(&mut self, mode: crate::entities::GameMode) -> bool {
+        self.entity_world.set_game_mode(mode)
+    }
+
+    /// Toggle le fly mode du joueur
+    pub fn toggle_fly(&mut self) -> bool {
+        self.entity_world.toggle_fly()
+    }
+
+    /// Retourne le mode de jeu actuel
+    pub fn get_game_mode(&self) -> Option<crate::entities::GameMode> {
+        self.entity_world.get_game_mode()
     }
 
     /// Toggle debug UI

@@ -1,4 +1,5 @@
 use glam::Vec3;
+use crate::entities::GameMode;
 
 /// Résultat de l'exécution d'une commande
 pub enum CommandResult {
@@ -14,6 +15,10 @@ pub enum CommandResult {
     None,
     /// Effacer l'historique du chat
     ClearChat,
+    /// Changer le mode de jeu
+    SetGameMode(GameMode),
+    /// Toggle le fly mode
+    ToggleFly,
 }
 
 /// Parse et exécute une commande
@@ -30,6 +35,8 @@ pub fn execute_command(command: &str, current_pos: Vec3) -> CommandResult {
         "/help" => handle_help(),
         "/clear" => handle_clear(),
         "/pos" => handle_pos(current_pos),
+        "/gamemode" | "/gm" => handle_gamemode(&parts),
+        "/fly" => handle_fly(),
         _ => CommandResult::Error(format!("Commande inconnue: {}. Tapez /help", cmd)),
     }
 }
@@ -83,6 +90,9 @@ fn handle_help() -> CommandResult {
 §6/tp <x> <y> <z>§r - Téléporte aux coordonnées absolues
 §6/tp ~<x> ~<y> ~<z>§r - Téléporte relativement (ex: /tp ~ ~5 ~)
 §6/pos§r - Affiche votre position actuelle
+§6/gamemode <creative|spectator>§r - Change le mode de jeu
+§6/gm <c|s>§r - Raccourci pour gamemode
+§6/fly§r - Toggle le mode vol (créatif seulement)
 §6/clear§r - Efface l'historique du chat
 §6/help§r - Affiche cette aide
 
@@ -90,6 +100,9 @@ fn handle_help() -> CommandResult {
 /tp 100 64 200
 /tp ~ ~10 ~ (monte de 10 blocs)
 /tp ~5 ~ ~ (avance de 5 blocs)
+/gamemode creative
+/gm spectator
+/fly
 "#;
     CommandResult::Success(help_text.to_string())
 }
@@ -100,4 +113,22 @@ fn handle_clear() -> CommandResult {
 
 fn handle_pos(current_pos: Vec3) -> CommandResult {
     CommandResult::Success(format!("Position: X: {:.1}, Y: {:.1}, Z: {:.1}", current_pos.x, current_pos.y, current_pos.z))
+}
+
+fn handle_gamemode(parts: &[&str]) -> CommandResult {
+    if parts.len() < 2 {
+        return CommandResult::Error("Usage: /gamemode <creative|spectator> ou /gm <c|s>".to_string());
+    }
+
+    let mode = match parts[1].to_lowercase().as_str() {
+        "creative" | "c" => GameMode::Creative { fly_enabled: true },
+        "spectator" | "s" => GameMode::Spectator,
+        _ => return CommandResult::Error(format!("Mode inconnu: {}. Modes disponibles: creative, spectator", parts[1])),
+    };
+
+    CommandResult::SetGameMode(mode)
+}
+
+fn handle_fly() -> CommandResult {
+    CommandResult::ToggleFly
 }

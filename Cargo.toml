@@ -8,6 +8,9 @@ wgpu = "0.19"
 winit = "0.30.13"
 glam = "0.32.1"
 
+# ECS
+hecs = "0.11"
+
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 pollster = "0.4.0"

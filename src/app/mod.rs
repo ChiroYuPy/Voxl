@@ -1,8 +1,9 @@
 use crate::renderer::WgpuState;
 use crate::raycast::{Ray, RAYCAST_DISTANCE, Raycast};
-use crate::input::{InputManager, PlayerController, GameAction};
+use crate::input::{InputManager, GameAction};
 use crate::voxel::GlobalVoxelId;
 use crate::debug::commands::{execute_command, CommandResult};
+use crate::entities::systems::{player_input_system, player_physics_system, jump_system};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -15,7 +16,6 @@ use std::time::Instant;
 pub struct App {
     window: Option<Window>,
     wgpu_state: Option<WgpuState>,
-    player: PlayerController,
     input: InputManager,
     is_closing: bool,
     modifiers: Modifiers,
@@ -29,7 +29,6 @@ impl Default for App {
         Self {
             window: None,
             wgpu_state: None,
-            player: PlayerController::default(),
             input: InputManager::default(),
             is_closing: false,
             modifiers: Modifiers::default(),
@@ -231,17 +230,42 @@ impl App {
                 wgpu_state.add_chat_message(format!("§cErreur: {}", msg), false);
             }
             CommandResult::Teleport(pos) => {
-                wgpu_state.camera_mut().position = pos.into();
+                wgpu_state.teleport_player(pos);
                 wgpu_state.add_chat_message(format!("§aTéléporté vers ({:.1}, {:.1}, {:.1})", pos.x, pos.y, pos.z), false);
             }
             CommandResult::TeleportRelative(pos) => {
-                wgpu_state.camera_mut().position = pos.into();
+                wgpu_state.teleport_player_relative(pos);
                 wgpu_state.add_chat_message(format!("§aTéléporté relativement vers ({:.1}, {:.1}, {:.1})", pos.x, pos.y, pos.z), false);
             }
             CommandResult::None => {}
             CommandResult::ClearChat => {
                 wgpu_state.clear_chat();
                 wgpu_state.add_chat_message("Chat effacé".to_string(), false);
+            }
+            CommandResult::SetGameMode(mode) => {
+                wgpu_state.set_game_mode(mode);
+                let mode_name = mode.name();
+                wgpu_state.add_chat_message(format!("§aMode de jeu changé: {}", mode_name), false);
+
+                // Message spécial si on passe en spectateur
+                if matches!(mode, crate::entities::GameMode::Spectator) {
+                    wgpu_state.add_chat_message("§7Mode spectateur: vol activé, collisions désactivées".to_string(), false);
+                }
+            }
+            CommandResult::ToggleFly => {
+                if let Some(current_mode) = wgpu_state.get_game_mode() {
+                    match current_mode {
+                        crate::entities::GameMode::Spectator => {
+                            wgpu_state.add_chat_message("§cImpossible de toggle le fly en mode spectateur!".to_string(), false);
+                        }
+                        crate::entities::GameMode::Creative { .. } => {
+                            wgpu_state.toggle_fly();
+                            let new_mode = wgpu_state.get_game_mode().unwrap();
+                            let fly_status = if new_mode.is_flying() { "activé" } else { "désactivé" };
+                            wgpu_state.add_chat_message(format!("§aMode vol {}", fly_status), false);
+                        }
+                    }
+                }
             }
         }
     }
@@ -517,12 +541,29 @@ impl ApplicationHandler for App {
             // Cap delta time to prevent huge jumps (e.g. if window was dragged)
             let delta_time = delta_time.min(0.1);
 
-            // Update player/camera FIRST (before clearing input state)
+            // Update ECS systems FIRST (before clearing input state)
             // Skip movement if chat is open
             if let Some(wgpu_state) = &mut self.wgpu_state {
-
                 if !wgpu_state.is_chat_open() {
-                    self.player.update_direct(wgpu_state.camera_mut(), self.input.state(), delta_time);
+                    let voxel_world_ref = wgpu_state.world().clone();
+
+                    // Système d'input joueur: met à jour vélocité et direction du regard
+                    player_input_system(wgpu_state.entity_world_mut().world(), self.input.state(), delta_time);
+
+                    // Système de saut
+                    {
+                        let world_read = voxel_world_ref.read().unwrap();
+                        jump_system(wgpu_state.entity_world_mut().world(), self.input.state(), &world_read);
+                    }
+
+                    // Système de physique: applique gravité et collisions
+                    {
+                        let world_read = voxel_world_ref.read().unwrap();
+                        player_physics_system(wgpu_state.entity_world_mut().world(), &world_read, delta_time);
+                    }
+
+                    // Synchroniser la caméra avec la position du joueur
+                    wgpu_state.update_camera_from_player();
                 }
                 wgpu_state.process_mesh_updates();
             }
@@ -582,6 +623,46 @@ impl ApplicationHandler for App {
                     if let Some(state) = &mut self.wgpu_state {
                         state.toggle_debug_ui();
                         println!("Debug UI: {}", state.is_debug_ui_enabled());
+                    }
+                }
+
+                // Toggle fly mode (F5)
+                if self.input.state().just_pressed(GameAction::ToggleFly) {
+                    if let Some(state) = &mut self.wgpu_state {
+                        if let Some(current_mode) = state.get_game_mode() {
+                            match current_mode {
+                                crate::entities::GameMode::Spectator => {
+                                    state.add_chat_message("§cImpossible de toggle le fly en mode spectateur!".to_string(), false);
+                                }
+                                crate::entities::GameMode::Creative { .. } => {
+                                    state.toggle_fly();
+                                    let new_mode = state.get_game_mode().unwrap();
+                                    let fly_status = if new_mode.is_flying() { "activé" } else { "désactivé" };
+                                    state.add_chat_message(format!("§aMode vol {}", fly_status), false);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Cycle gamemode (G ou molette)
+                if self.input.state().just_pressed(GameAction::CycleGameMode) {
+                    if let Some(state) = &mut self.wgpu_state {
+                        let new_mode = match state.get_game_mode() {
+                            Some(crate::entities::GameMode::Creative { .. }) => {
+                                crate::entities::GameMode::Spectator
+                            }
+                            Some(crate::entities::GameMode::Spectator) => {
+                                crate::entities::GameMode::Creative { fly_enabled: true }
+                            }
+                            None => crate::entities::GameMode::Creative { fly_enabled: true },
+                        };
+                        state.set_game_mode(new_mode);
+                        let mode_name = new_mode.name();
+                        state.add_chat_message(format!("§aMode de jeu changé: {}", mode_name), false);
+                        if matches!(new_mode, crate::entities::GameMode::Spectator) {
+                            state.add_chat_message("§7Mode spectateur: vol activé, collisions désactivées".to_string(), false);
+                        }
                     }
                 }
 
