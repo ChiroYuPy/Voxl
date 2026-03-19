@@ -1,0 +1,4 @@
+name = "Buche de Bouleau Écorcée"
+texture = "stripped_birch_log_top"
+solid = true
+ao = true

@@ -1,0 +1,6 @@
+name = "Buche de Cerisier"
+texture = "cherry_log_top"
+texture_side = "cherry_log"
+texture_bottom = "cherry_log_top"
+solid = true
+ao = true

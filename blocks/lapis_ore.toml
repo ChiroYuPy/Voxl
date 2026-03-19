@@ -1,0 +1,4 @@
+name = "Minerai de Lapis"
+texture = "lapis_ore"
+solid = true
+ao = true

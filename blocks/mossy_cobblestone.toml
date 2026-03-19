@@ -1,0 +1,4 @@
+name = "Galets Moussus"
+texture = "mossy_cobblestone"
+solid = true
+ao = true

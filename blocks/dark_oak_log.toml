@@ -1,0 +1,7 @@
+name = "Buche de Chêne Noir"
+texture = "dark_oak_log_top"
+texture_side = "dark_oak_log"
+texture_top = "dark_oak_log_top"
+texture_bottom = "dark_oak_log_top"
+solid = true
+ao = true

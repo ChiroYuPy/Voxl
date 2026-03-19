@@ -1,0 +1,4 @@
+name = "Bloc de Diamant"
+texture = "diamond_block"
+solid = true
+ao = true

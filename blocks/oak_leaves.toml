@@ -1,0 +1,4 @@
+name = "Feuilles de Chêne"
+texture = "oak_leaves"
+solid = true
+ao = true

@@ -1,0 +1,4 @@
+name = "Pierre Lisse"
+texture = "smooth_stone"
+solid = true
+ao = true

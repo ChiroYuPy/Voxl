@@ -1,0 +1,4 @@
+name = "Briques de Pierre Sculptées"
+texture = "chiseled_stone_bricks"
+solid = true
+ao = true

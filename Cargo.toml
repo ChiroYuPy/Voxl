@@ -1,0 +1,31 @@
+[package]
+name = "VoxlReborn"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wgpu = "0.19"
+winit = "0.30.13"
+glam = "0.32.1"
+
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+pollster = "0.4.0"
+env_logger = "0.11.9"
+bytemuck = { version = "1.22", features = ["derive"] }
+image = "0.25"
+
+# Config file parsing
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Multithreading
+rayon = "1.10"
+crossbeam-channel = "0.5"
+
+# UI
+egui = "0.27"
+egui-wgpu = "0.27"
+
+# Noise pour la génération de terrain
+noise = "0.9"

@@ -1,0 +1,5 @@
+name = "Cobblestone"
+texture = "cobblestone"
+
+solid = true
+transparent = false

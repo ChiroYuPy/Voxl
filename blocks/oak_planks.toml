@@ -1,0 +1,5 @@
+name = "Oak Planks"
+texture = "oak_planks"
+
+solid = true
+transparent = false

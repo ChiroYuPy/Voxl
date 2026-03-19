@@ -1,0 +1,4 @@
+name = "Planches de Bouleau"
+texture = "birch_planks"
+solid = true
+ao = true

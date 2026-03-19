@@ -1,0 +1,4 @@
+name = "Pierre Lumineuse"
+texture = "glowstone"
+solid = true
+ao = true

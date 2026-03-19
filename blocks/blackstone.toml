@@ -1,0 +1,4 @@
+name = "Pierre Noire"
+texture = "blackstone"
+solid = true
+ao = true

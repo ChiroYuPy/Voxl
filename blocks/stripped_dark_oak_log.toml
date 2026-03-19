@@ -1,0 +1,4 @@
+name = "Buche de Chêne Noir Écorcée"
+texture = "stripped_dark_oak_log_top"
+solid = true
+ao = true

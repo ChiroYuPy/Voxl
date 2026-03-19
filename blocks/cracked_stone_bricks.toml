@@ -1,0 +1,4 @@
+name = "Briques de Pierre Fissurées"
+texture = "cracked_stone_bricks"
+solid = true
+ao = true

@@ -1,0 +1,4 @@
+name = "Minerai de Redstone"
+texture = "redstone_ore"
+solid = true
+ao = true

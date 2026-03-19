@@ -1,0 +1,4 @@
+name = "Briques de Pierre de l'End"
+texture = "end_stone_bricks"
+solid = true
+ao = true

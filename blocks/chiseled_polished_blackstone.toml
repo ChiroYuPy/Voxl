@@ -1,0 +1,4 @@
+name = "Pierre Noire Poli Sculptée"
+texture = "chiseled_polished_blackstone"
+solid = true
+ao = true

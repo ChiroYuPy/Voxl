@@ -1,0 +1,4 @@
+name = "Planches de Distordu"
+texture = "warped_planks"
+solid = true
+ao = true

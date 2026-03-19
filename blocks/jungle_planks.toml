@@ -1,0 +1,4 @@
+name = "Planches de Jungle"
+texture = "jungle_planks"
+solid = true
+ao = true

@@ -1,0 +1,4 @@
+name = "Planches de Chêne Noir"
+texture = "dark_oak_planks"
+solid = true
+ao = true

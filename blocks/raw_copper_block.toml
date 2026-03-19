@@ -1,0 +1,4 @@
+name = "Bloc de Cuivre Brut"
+texture = "raw_copper_block"
+solid = true
+ao = true

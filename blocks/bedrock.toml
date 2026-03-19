@@ -1,0 +1,5 @@
+name = "Bedrock"
+texture = "bedrock"
+
+solid = true
+transparent = false

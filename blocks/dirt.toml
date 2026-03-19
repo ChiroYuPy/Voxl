@@ -1,0 +1,5 @@
+name = "Dirt"
+texture = "dirt"
+
+solid = true
+transparent = false

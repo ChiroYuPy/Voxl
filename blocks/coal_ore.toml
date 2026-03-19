@@ -1,0 +1,4 @@
+name = "Minerai de Charbon"
+texture = "coal_ore"
+solid = true
+ao = true

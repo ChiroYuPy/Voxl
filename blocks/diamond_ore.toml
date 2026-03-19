@@ -1,0 +1,4 @@
+name = "Minerai de Diamant"
+texture = "diamond_ore"
+solid = true
+ao = true

@@ -1,0 +1,4 @@
+name = "Bloc de Netherite"
+texture = "netherite_block"
+solid = true
+ao = true

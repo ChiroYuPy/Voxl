@@ -1,0 +1,4 @@
+name = "Briques de Pierre Noire Polie"
+texture = "polished_blackstone_bricks"
+solid = true
+ao = true

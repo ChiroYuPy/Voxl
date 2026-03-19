@@ -1,0 +1,4 @@
+name = "Bloc de Fer Brut"
+texture = "raw_iron_block"
+solid = true
+ao = true

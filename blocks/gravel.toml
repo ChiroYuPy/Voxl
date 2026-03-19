@@ -1,0 +1,5 @@
+name = "Gravel"
+texture = "gravel"
+
+solid = true
+transparent = false

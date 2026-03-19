@@ -1,0 +1,5 @@
+name = "Ao Block"
+texture = "white"
+
+solid = true
+transparent = false

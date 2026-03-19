@@ -1,0 +1,4 @@
+name = "Planches d'Acacia"
+texture = "acacia_planks"
+solid = true
+ao = true

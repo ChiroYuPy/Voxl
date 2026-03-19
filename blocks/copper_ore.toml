@@ -1,0 +1,4 @@
+name = "Minerai de Cuivre"
+texture = "copper_ore"
+solid = true
+ao = true

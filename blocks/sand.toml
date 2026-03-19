@@ -1,0 +1,5 @@
+name = "Sand"
+texture = "sand"
+
+solid = true
+transparent = false
