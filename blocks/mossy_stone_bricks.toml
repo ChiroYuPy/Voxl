@@ -1,4 +1,4 @@
-name = "Briques de Pierre Moussues"
-texture = "mossy_stone_bricks"
+name = "Mossy_Stone_Bricks"
+model = "mossy_stone_bricks"
 render_type = "opaque"
 collidable = true

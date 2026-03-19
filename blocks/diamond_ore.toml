@@ -1,4 +1,4 @@
-name = "Minerai de Diamant"
-texture = "diamond_ore"
+name = "Diamond_Ore"
+model = "diamond_ore"
 render_type = "opaque"
 collidable = true

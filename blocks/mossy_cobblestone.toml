@@ -1,4 +1,4 @@
-name = "Galets Moussus"
-texture = "mossy_cobblestone"
+name = "Mossy_Cobblestone"
+model = "cube"
 render_type = "opaque"
 collidable = true

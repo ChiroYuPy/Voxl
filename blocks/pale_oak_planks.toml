@@ -1,4 +1,4 @@
-name = "Planches de Chêne Pâle"
-texture = "pale_oak_planks"
+name = "Pale_Oak_Planks"
+model = "pale_oak_planks"
 render_type = "opaque"
 collidable = true

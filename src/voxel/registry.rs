@@ -85,23 +85,44 @@ pub type VoxelStringId = String;
 pub struct BlockConfig {
     /// Nom affichable du block
     pub name: String,
+
+    /// === SYSTÈME DE MODÈLES ===
+    /// Nom du modèle dans models/ (ex: "cube" pour models/cube.toml)
+    /// Si spécifié, utilise le système de modèles à la place des textures directes
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// === SYSTÈME DE TEXTURES DIRECT (legacy) ===
     /// Nom du fichier de texture (sans extension, dans assets/textures/)
-    pub texture: String,
+    /// Utilisé seulement si `model` n'est pas spécifié
+    #[serde(default)]
+    pub texture: Option<String>,
+
     /// Texture pour les côtés (optionnel, utilise "texture" par défaut)
     #[serde(default)]
     pub texture_side: Option<String>,
+
     /// Texture pour le dessous (optionnel, utilise "texture" par défaut)
     #[serde(default)]
     pub texture_bottom: Option<String>,
+
     /// Type de rendu du bloc (opaque, transparent, cutout, translucent, invisible)
     #[serde(default)]
     pub render_type: RenderType,
+
     /// Est-ce que le bloc est solide (collision)
     #[serde(default = "default_collidable")]
     pub collidable: bool,
 }
 
 fn default_collidable() -> bool { true }
+
+impl BlockConfig {
+    /// Retourne true si ce bloc utilise le système de modèles
+    pub fn uses_model(&self) -> bool {
+        self.model.is_some()
+    }
+}
 
 /// Coordonnées UV pour une texture dans l'atlas
 #[derive(Clone, Copy, Debug)]
@@ -134,11 +155,13 @@ pub struct VoxelDefinition {
     pub string_id: VoxelStringId,
     /// Nom affichable
     pub name: String,
-    /// Coordonnées UV pour la texture du dessus
+    /// Nom du modèle utilisé (si applicable)
+    pub model_name: Option<String>,
+    /// Coordonnées UV pour la texture du dessus (legacy)
     pub uv_top: TextureUV,
-    /// Coordonnées UV pour la texture des côtés
+    /// Coordonnées UV pour la texture des côtés (legacy)
     pub uv_side: TextureUV,
-    /// Coordonnées UV pour la texture du dessous
+    /// Coordonnées UV pour la texture du dessous (legacy)
     pub uv_bottom: TextureUV,
     /// Type de rendu du bloc
     pub render_type: RenderType,
@@ -160,6 +183,11 @@ impl VoxelDefinition {
     pub fn atlas_uv_offset(&self) -> (f32, f32) {
         self.uv_side.to_uv_offset()
     }
+
+    /// Retourne true si ce bloc utilise le système de modèles
+    pub fn uses_model(&self) -> bool {
+        self.model_name.is_some()
+    }
 }
 
 /// Registry des types de voxels
@@ -168,6 +196,12 @@ pub struct VoxelRegistry {
     definitions: Vec<VoxelDefinition>,
     /// Map string_id -> global_id
     string_to_id: HashMap<String, GlobalVoxelId>,
+    /// Loader de modèles (si utilisé)
+    model_loader: Option<crate::voxel::model::ModelLoader>,
+    /// Map texture_name -> (texture_id, TextureUV)
+    texture_uvs: HashMap<String, (usize, TextureUV)>,
+    /// Modèles résolus avec IDs de texture
+    resolved_models: HashMap<String, crate::voxel::model::ResolvedBlockModel>,
 }
 
 impl VoxelRegistry {
@@ -176,6 +210,9 @@ impl VoxelRegistry {
         let mut registry = Self {
             definitions: Vec::new(),
             string_to_id: HashMap::new(),
+            model_loader: None,
+            texture_uvs: HashMap::new(),
+            resolved_models: HashMap::new(),
         };
         // L'air (vide) est toujours à l'index 0
         let uv_air = TextureUV::new(0.0, 0.0, 0.0, 0.0, 1.0);
@@ -183,6 +220,7 @@ impl VoxelRegistry {
             global_id: 0,
             string_id: "air".to_string(),
             name: "Air".to_string(),
+            model_name: None,
             uv_top: uv_air,
             uv_side: uv_air,
             uv_bottom: uv_air,
@@ -192,8 +230,77 @@ impl VoxelRegistry {
         registry
     }
 
+    /// Charge les modèles depuis le dossier models/
+    /// Retourne la liste de toutes les textures utilisées par les modèles
+    pub fn load_models(&mut self) -> Result<Vec<String>, String> {
+        let mut loader = crate::voxel::model::ModelLoader::new();
+        let textures = loader.load_from_folder()?;
+        self.model_loader = Some(loader);
+        Ok(textures)
+    }
+
+    /// Enregistre les UVs des textures depuis l'atlas
+    /// Doit être appelé après la génération de l'atlas
+    pub fn register_texture_uvs(&mut self, texture_uvs: HashMap<String, (usize, TextureUV)>) {
+        self.texture_uvs = texture_uvs;
+    }
+
+    /// Résout tous les modèles avec les IDs de texture
+    /// Doit être appelé après register_texture_uvs
+    pub fn resolve_models(&mut self) {
+        if self.model_loader.is_none() {
+            return;
+        }
+
+        // Créer une map texture_name -> texture_id
+        let texture_map: HashMap<String, usize> = self.texture_uvs
+            .iter()
+            .map(|(name, (id, _uv))| (name.clone(), *id))
+            .collect();
+
+        let loader = self.model_loader.as_ref().unwrap();
+        for (name, model) in loader.all_models() {
+            let resolved = model.resolve(&texture_map);
+            self.resolved_models.insert(name.clone(), resolved);
+        }
+    }
+
+    /// Retourne le modèle résolu avec le nom donné
+    pub fn get_resolved_model(&self, name: &str) -> Option<&crate::voxel::model::ResolvedBlockModel> {
+        self.resolved_models.get(name)
+    }
+
+    /// Retourne les UV d'une texture par son nom
+    pub fn get_texture_uv(&self, name: &str) -> Option<TextureUV> {
+        self.texture_uvs.get(name).map(|(_, uv)| *uv)
+    }
+
+    /// Retourne les UV d'une texture par son ID
+    pub fn get_texture_uv_by_id(&self, texture_id: usize) -> TextureUV {
+        // Chercher dans la map texture_uvs
+        for (_name, (id, uv)) in &self.texture_uvs {
+            if *id == texture_id {
+                return *uv;
+            }
+        }
+        // Fallback
+        TextureUV::new(0.0, 0.0, 1.0, 1.0, 1.0)
+    }
+
+    /// Retourne le modèle avec le nom donné, s'il existe (version non résolue)
+    pub fn get_model(&self, name: &str) -> Option<&crate::voxel::model::BlockModel> {
+        self.model_loader.as_ref()?.get(name)
+    }
+
+    /// Retourne true si le système de modèles est chargé
+    pub fn has_models(&self) -> bool {
+        self.model_loader.is_some()
+    }
+
     /// Charge les définitions de blocks depuis le dossier blocks/
     /// Retourne la liste des textures à charger pour générer l'atlas
+    /// NOTE: Cette méthode ne charge que les blocs utilisant l'ancien système de textures directes.
+    /// Pour le système de modèles, utilisez load_models() puis register_blocks_with_models().
     pub fn load_from_folder(&mut self) -> Result<Vec<String>, String> {
         let blocks_dir = Path::new("blocks");
 
@@ -235,16 +342,33 @@ impl VoxelRegistry {
             let config: BlockConfig = toml::from_str(&content)
                 .map_err(|e| format!("Failed to parse {:?}: {}", path, e))?;
 
-            // Ajouter les textures à la liste (pour l'atlas)
-            texture_list.push(config.texture.clone());
-            if let Some(ref side) = config.texture_side {
-                texture_list.push(side.clone());
+            // Si le bloc utilise un modèle, ajouter les textures du modèle
+            if config.uses_model() {
+                if let Some(model_name) = &config.model {
+                    if let Some(model) = self.get_model(model_name) {
+                        for tex in model.get_used_textures() {
+                            if !texture_list.contains(&tex) {
+                                texture_list.push(tex);
+                            }
+                        }
+                        println!("Loaded block '{}' (model: {})", string_id, model_name);
+                    } else {
+                        println!("Warning: block '{}' references unknown model '{}'", string_id, model_name);
+                    }
+                }
+            } else {
+                // Ancien système: utiliser les textures directes
+                if let Some(ref tex) = config.texture {
+                    texture_list.push(tex.clone());
+                }
+                if let Some(ref side) = config.texture_side {
+                    texture_list.push(side.clone());
+                }
+                if let Some(ref bottom) = config.texture_bottom {
+                    texture_list.push(bottom.clone());
+                }
+                println!("Loaded block '{}' (texture: {:?})", string_id, config.texture);
             }
-            if let Some(ref bottom) = config.texture_bottom {
-                texture_list.push(bottom.clone());
-            }
-
-            println!("Loaded block '{}' (texture: {})", string_id, config.texture);
         }
 
         Ok(texture_list)
@@ -266,6 +390,7 @@ impl VoxelRegistry {
                 global_id: self.definitions.len(),
                 string_id: string_id.clone(),
                 name: config.name,
+                model_name: config.model,
                 uv_top,
                 uv_side,
                 uv_bottom,
@@ -301,6 +426,7 @@ impl VoxelRegistry {
             global_id,
             string_id: string_id.to_string(),
             name: name.to_string(),
+            model_name: None,
             uv_top: uv,
             uv_side: uv,
             uv_bottom: uv,
@@ -386,6 +512,12 @@ impl SharedVoxelRegistry {
         self.inner.write().unwrap().load_from_folder()
     }
 
+    /// Charge les modèles depuis le dossier models/
+    /// Retourne la liste de toutes les textures utilisées par les modèles
+    pub fn load_models(&self) -> Result<Vec<String>, String> {
+        self.inner.write().unwrap().load_models()
+    }
+
     /// Enregistre les blocks avec leurs UVs
     pub fn register_with_uvs(&self, blocks_data: Vec<(String, BlockConfig, TextureUV, TextureUV, TextureUV)>, texture_size_in_atlas: f32) {
         self.inner.write().unwrap().register_with_uvs(blocks_data, texture_size_in_atlas);
@@ -429,6 +561,41 @@ impl SharedVoxelRegistry {
 
     pub fn len(&self) -> usize {
         self.inner.read().unwrap().len()
+    }
+
+    /// Enregistre les UVs des textures depuis l'atlas
+    pub fn register_texture_uvs(&self, texture_uvs: HashMap<String, (usize, TextureUV)>) {
+        self.inner.write().unwrap().register_texture_uvs(texture_uvs);
+    }
+
+    /// Résout tous les modèles avec les IDs de texture
+    pub fn resolve_models(&self) {
+        self.inner.write().unwrap().resolve_models();
+    }
+
+    /// Retourne le modèle résolu avec le nom donné
+    pub fn get_resolved_model(&self, name: &str) -> Option<crate::voxel::model::ResolvedBlockModel> {
+        self.inner.read().unwrap().get_resolved_model(name).cloned()
+    }
+
+    /// Retourne les UV d'une texture par son nom
+    pub fn get_texture_uv(&self, name: &str) -> Option<TextureUV> {
+        self.inner.read().unwrap().get_texture_uv(name)
+    }
+
+    /// Retourne les UV d'une texture par son ID
+    pub fn get_texture_uv_by_id(&self, texture_id: usize) -> TextureUV {
+        self.inner.read().unwrap().get_texture_uv_by_id(texture_id)
+    }
+
+    /// Retourne le modèle avec le nom donné, s'il existe
+    pub fn get_model(&self, name: &str) -> Option<crate::voxel::model::BlockModel> {
+        self.inner.read().unwrap().get_model(name).cloned()
+    }
+
+    /// Retourne true si le système de modèles est chargé
+    pub fn has_models(&self) -> bool {
+        self.inner.read().unwrap().has_models()
     }
 }
 

@@ -1,4 +1,4 @@
-name = "Briques de Pierre Sculptées"
-texture = "chiseled_stone_bricks"
+name = "Chiseled_Stone_Bricks"
+model = "chiseled_stone_bricks"
 render_type = "opaque"
 collidable = true

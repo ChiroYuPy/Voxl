@@ -1,4 +1,4 @@
-name = "Grès Rouge Sculpté"
-texture = "chiseled_red_sandstone"
+name = "Chiseled_Red_Sandstone"
+model = "chiseled_red_sandstone"
 render_type = "opaque"
 collidable = true

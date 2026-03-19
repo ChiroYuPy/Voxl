@@ -1,4 +1,4 @@
-name = "Oak Planks"
-texture = "oak_planks"
+name = "Oak_Planks"
+model = "oak_planks"
 render_type = "opaque"
 collidable = true

@@ -1,4 +1,4 @@
-name = "Pierre de l'End"
-texture = "end_stone"
+name = "End_Stone"
+model = "end_stone"
 render_type = "opaque"
 collidable = true

@@ -1,4 +1,4 @@
 name = "Dirt"
-texture = "dirt"
+model = "dirt"
 render_type = "opaque"
 collidable = true

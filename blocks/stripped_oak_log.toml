@@ -1,4 +1,4 @@
-name = "Stripped Oak Log"
-texture = "stripped_oak_log_top"
+name = "Stripped_Oak_Log"
+model = "stripped_oak_log"
 render_type = "opaque"
 collidable = true

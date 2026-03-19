@@ -1,4 +1,4 @@
-name = "Bloc d'Or"
-texture = "gold_block"
+name = "Gold_Block"
+model = "gold_block"
 render_type = "opaque"
 collidable = true

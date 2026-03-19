@@ -1,4 +1,4 @@
-name = "Bloc de Fer"
-texture = "iron_block"
+name = "Iron_Block"
+model = "iron_block"
 render_type = "opaque"
 collidable = true

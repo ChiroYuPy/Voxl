@@ -1,4 +1,4 @@
-name = "Bloc de Cuivre Brut"
-texture = "raw_copper_block"
+name = "Raw_Copper_Block"
+model = "raw_copper_block"
 render_type = "opaque"
 collidable = true

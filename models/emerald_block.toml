@@ -1,0 +1,30 @@
+name = "emerald_block"
+
+[textures]
+texture = "emerald_block"
+
+[[elements]]
+from = [0.0, 0.0, 0.0]
+to = [16.0, 16.0, 16.0]
+
+[elements.faces.top]
+texture = "#texture"
+enabled = true
+[elements.faces.bottom]
+texture = "#texture"
+enabled = true
+[elements.faces.north]
+texture = "#texture"
+enabled = true
+[elements.faces.south]
+texture = "#texture"
+enabled = true
+[elements.faces.east]
+texture = "#texture"
+enabled = true
+[elements.faces.west]
+texture = "#texture"
+enabled = true
+
+render_type = "opaque"
+collidable = true

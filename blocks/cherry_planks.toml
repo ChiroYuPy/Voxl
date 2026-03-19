@@ -1,4 +1,4 @@
-name = "Planches de Cerisier"
-texture = "cherry_planks"
+name = "Cherry_Planks"
+model = "cherry_planks"
 render_type = "opaque"
 collidable = true

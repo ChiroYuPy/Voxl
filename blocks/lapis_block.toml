@@ -1,4 +1,4 @@
-name = "Bloc de Lapis"
-texture = "lapis_block"
+name = "Lapis_Block"
+model = "lapis_block"
 render_type = "opaque"
 collidable = true

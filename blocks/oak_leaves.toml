@@ -1,4 +1,4 @@
-name = "Feuilles de Chêne"
-texture = "oak_leaves"
-render_type = "cutout"
-collidable = false
+name = "Oak_Leaves"
+model = "oak_leaves"
+render_type = "opaque"
+collidable = true

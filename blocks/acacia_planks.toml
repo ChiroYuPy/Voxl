@@ -1,4 +1,4 @@
-name = "Planches d'Acacia"
-texture = "acacia_planks"
+name = "Acacia_Planks"
+model = "acacia_planks"
 render_type = "opaque"
 collidable = true

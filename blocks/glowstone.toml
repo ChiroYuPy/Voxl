@@ -1,4 +1,4 @@
-name = "Pierre Lumineuse"
-texture = "glowstone"
+name = "Glowstone"
+model = "glowstone"
 render_type = "opaque"
 collidable = true

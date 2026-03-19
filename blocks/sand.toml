@@ -1,4 +1,4 @@
 name = "Sand"
-texture = "sand"
+model = "sand"
 render_type = "opaque"
 collidable = true

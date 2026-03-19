@@ -1,4 +1,4 @@
-name = "Buche de Sapin Écorcée"
-texture = "stripped_spruce_log_top"
+name = "Stripped_Spruce_Log"
+model = "stripped_spruce_log"
 render_type = "opaque"
 collidable = true

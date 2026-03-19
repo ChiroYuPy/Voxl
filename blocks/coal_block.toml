@@ -1,4 +1,4 @@
-name = "Bloc de Charbon"
-texture = "coal_block"
+name = "Coal_Block"
+model = "coal_block"
 render_type = "opaque"
 collidable = true

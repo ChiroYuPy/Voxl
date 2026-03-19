@@ -3,6 +3,7 @@ use crate::voxel::face::TriangleDiagonal;
 use super::{VoxelFace, AoCalculator};
 use glam::{IVec3, Vec3};
 use glam::FloatExt;
+use crate::voxel::model::{ResolvedBlockModel, ElementBounds};
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -156,16 +157,25 @@ pub fn generate_chunk_mesh_with_diagonal(
         for y in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
                 let global_id = chunk.get(x, y, z);
-                let Some(id) = global_id else {
-                    continue;
-                };
-                if id == 0 {
-                    continue; // Air
-                }
+                let Some(id) = global_id else { continue; };
+                if id == 0 { continue; }
 
                 let world_pos = chunk_offset + IVec3::new(x as i32, y as i32, z as i32);
                 let current_voxel = VoxelRef::from_id(id, registry);
 
+                // Check if this voxel uses a model
+                let definition = registry.get(id);
+                if let Some(def) = definition {
+                    if let Some(model_name) = &def.model_name {
+                        if let Some(model) = registry.get_resolved_model(model_name) {
+                            // Use model-based mesh generation
+                            add_model_faces(&mut vertices, world_pos, &model, id, registry, &context);
+                            continue;
+                        }
+                    }
+                }
+
+                // Legacy: use standard 6-face cube mesh
                 for face in VoxelFace::ALL {
                     let neighbor_pos = world_pos + face.normal();
                     let neighbor = context.get_voxel(neighbor_pos.x, neighbor_pos.y, neighbor_pos.z);
@@ -179,6 +189,96 @@ pub fn generate_chunk_mesh_with_diagonal(
     }
 
     vertices
+}
+
+/// Ajoute les faces d'un modèle au mesh
+fn add_model_faces(
+    vertices: &mut Vec<VoxelVertex>,
+    pos: IVec3,
+    model: &ResolvedBlockModel,
+    global_id: GlobalVoxelId,
+    registry: &SharedVoxelRegistry,
+    context: &VoxelWorldContext,
+) {
+    let current_voxel = VoxelRef::from_id(global_id, registry);
+
+    for element in &model.elements {
+        for (face, element_face) in &element.faces {
+            if !element_face.enabled {
+                continue;
+            }
+
+            // Determine which face to check for culling
+            let cull_face = element_face.cull_face.unwrap_or(*face);
+            let neighbor_pos = pos + cull_face.normal();
+            let neighbor = context.get_voxel(neighbor_pos.x, neighbor_pos.y, neighbor_pos.z);
+
+            if should_render_face(current_voxel, neighbor) {
+                add_element_face(
+                    vertices,
+                    pos,
+                    &element.bounds,
+                    *face,
+                    element_face.texture_id,
+                    registry,
+                    context,
+                );
+            }
+        }
+    }
+}
+
+/// Ajoute une face d'un élément de modèle au mesh
+fn add_element_face(
+    vertices: &mut Vec<VoxelVertex>,
+    pos: IVec3,
+    bounds: &ElementBounds,
+    face: VoxelFace,
+    texture_id: usize,
+    registry: &SharedVoxelRegistry,
+    context: &VoxelWorldContext,
+) {
+    let normal = face.normal_f32();
+    let voxel_pos = [pos.x, pos.y, pos.z];
+
+    // Get vertices and UVs for this element face
+    let face_vertices = bounds.get_face_vertices(face);
+    let face_uvs = bounds.get_face_uvs(face);
+
+    // Get UV from texture atlas using texture_id
+    let texture_uv = registry.get_texture_uv_by_id(texture_id);
+    let (uv_offset_x, uv_offset_y) = (texture_uv.u_min, texture_uv.v_min);
+    let texture_size = texture_uv.size_in_atlas;
+
+    // For AO, we use the voxel position (not the element position)
+    // Les vertices sont dans l'ordre: coin0, coin1, coin2, coin0, coin2, coin3
+    // quad_uvs contient les UV pour l'interpolation AO: [coin0, coin1, coin2, coin3]
+    let quad_uvs = face.quad_uvs();
+    // L'index du coin pour chaque vertex (0,1,2,0,2,3)
+    let vertex_to_corner = [0, 1, 2, 0, 2, 3];
+    let corner_ao = calculate_face_ao(context, pos, face);
+    let light = calculate_face_light(face);
+
+    for i in 0..6 {
+        let base_uv = face_uvs[i];
+        let uv = [
+            uv_offset_x + base_uv[0] * texture_size,
+            uv_offset_y + (1.0 - base_uv[1]) * texture_size, // Flip Y for UV
+        ];
+
+        // Interpolate AO using the quad UV corresponding to this vertex's corner
+        let corner_uv = quad_uvs[vertex_to_corner[i]];
+        let ao = interpolate_ao_for_vertex(corner_ao, quad_uvs, corner_uv);
+        let final_light = light * ao;
+
+        vertices.push(VoxelVertex {
+            position: face_vertices[i],
+            normal,
+            voxel_pos,
+            uv,
+            color: [final_light, final_light, final_light, 1.0],
+        });
+    }
 }
 
 fn calculate_face_ao(context: &VoxelWorldContext, world_pos: IVec3, face: VoxelFace) -> [f32; 4] {

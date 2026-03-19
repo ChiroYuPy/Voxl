@@ -1,4 +1,4 @@
-name = "Grès"
-texture = "sandstone"
+name = "Sandstone"
+model = "sandstone"
 render_type = "opaque"
 collidable = true

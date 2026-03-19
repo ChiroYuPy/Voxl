@@ -1,7 +1,4 @@
-name = "Buche de Jungle"
-texture = "jungle_log_top"
-texture_side = "jungle_log"
-texture_top = "jungle_log_top"
-texture_bottom = "jungle_log_top"
+name = "Jungle_Log"
+model = "jungle_log"
 render_type = "opaque"
 collidable = true

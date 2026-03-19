@@ -1,6 +1,4 @@
 name = "Grass"
-texture = "grass_top"
-texture_side = "grass_side"
-texture_bottom = "dirt"
+model = "grass"
 render_type = "opaque"
 collidable = true

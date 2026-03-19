@@ -1,4 +1,4 @@
-name = "Bloc d'Or Brut"
-texture = "raw_gold_block"
+name = "Raw_Gold_Block"
+model = "raw_gold_block"
 render_type = "opaque"
 collidable = true

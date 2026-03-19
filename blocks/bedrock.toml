@@ -1,4 +1,4 @@
 name = "Bedrock"
-texture = "bedrock"
+model = "bedrock"
 render_type = "opaque"
 collidable = true

@@ -1,0 +1,4 @@
+name = "Test Model Block"
+model = "slab"
+render_type = "opaque"
+collidable = true

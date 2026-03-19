@@ -1,4 +1,4 @@
 name = "Stone"
-texture = "stone"
+model = "stone"
 render_type = "opaque"
 collidable = true

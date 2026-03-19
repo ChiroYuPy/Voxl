@@ -1,4 +1,4 @@
-name = "Planches de Chêne Noir"
-texture = "dark_oak_planks"
+name = "Dark_Oak_Planks"
+model = "dark_oak_planks"
 render_type = "opaque"
 collidable = true

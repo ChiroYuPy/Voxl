@@ -1,4 +1,4 @@
-name = "Minerai de Fer"
-texture = "iron_ore"
+name = "Iron_Ore"
+model = "iron_ore"
 render_type = "opaque"
 collidable = true

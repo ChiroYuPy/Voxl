@@ -1,4 +1,4 @@
-name = "Buche d'Acacia Écorcée"
-texture = "stripped_acacia_log_top"
+name = "Stripped_Acacia_Log"
+model = "stripped_acacia_log"
 render_type = "opaque"
 collidable = true

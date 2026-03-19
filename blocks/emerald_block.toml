@@ -1,4 +1,4 @@
-name = "Bloc d'Émeraude"
-texture = "emerald_block"
+name = "Emerald_Block"
+model = "emerald_block"
 render_type = "opaque"
 collidable = true

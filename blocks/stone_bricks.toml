@@ -1,4 +1,4 @@
-name = "Briques de Pierre"
-texture = "stone_bricks"
+name = "Stone_Bricks"
+model = "stone_bricks"
 render_type = "opaque"
 collidable = true

@@ -1,4 +1,4 @@
-name = "Planches de Jungle"
-texture = "jungle_planks"
+name = "Jungle_Planks"
+model = "jungle_planks"
 render_type = "opaque"
 collidable = true

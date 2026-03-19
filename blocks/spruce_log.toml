@@ -1,7 +1,4 @@
-name = "Buche de Sapin"
-texture = "spruce_log_top"
-texture_side = "spruce_log"
-texture_top = "spruce_log_top"
-texture_bottom = "spruce_log_top"
+name = "Spruce_Log"
+model = "spruce_log"
 render_type = "opaque"
 collidable = true

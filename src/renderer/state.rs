@@ -265,10 +265,35 @@ impl WgpuState {
                 Vec::new()
             });
 
-        // Collecter toutes les textures nécessaires
-        let mut texture_names = Vec::new();
-        for (_, config) in &block_configs {
-            texture_names.push(config.texture.clone());
+        // Créer le registry de voxels AVANT de charger les configs
+        let registry = SharedVoxelRegistry::new();
+
+        // Charger les modèles depuis le dossier models/
+        let mut model_textures = Vec::new();
+        if let Ok(textures) = registry.load_models() {
+            model_textures = textures;
+        }
+
+        // Collecter toutes les textures nécessaires (y compris des modèles)
+        let mut texture_names = model_textures.clone();
+        for (_string_id, config) in &block_configs {
+            if config.uses_model() {
+                // Ajouter les textures du modèle
+                if let Some(model_name) = &config.model {
+                    if let Some(model) = registry.get_model(model_name) {
+                        for tex in model.get_used_textures() {
+                            if !texture_names.contains(&tex) {
+                                texture_names.push(tex);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // Legacy: textures directes
+            if let Some(ref tex) = config.texture {
+                texture_names.push(tex.clone());
+            }
             if let Some(ref side) = config.texture_side {
                 texture_names.push(side.clone());
             }
@@ -328,6 +353,19 @@ impl WgpuState {
 
                     (texture, view, uvs, 1.0) // texture_size = 1.0 pour l'atlas fallback
                 });
+
+        // Construire la map texture_name -> (texture_id, TextureUV) pour les modèles
+        let mut texture_uv_map = std::collections::HashMap::new();
+        for (idx, texture_name) in texture_names.iter().enumerate() {
+            if let Some((u_min, v_min, u_max, v_max)) = texture_uvs.get(texture_name) {
+                let uv = TextureUV::new(*u_min, *v_min, *u_max, *v_max, texture_size_in_atlas);
+                texture_uv_map.insert(texture_name.clone(), (idx, uv));
+            }
+        }
+        registry.register_texture_uvs(texture_uv_map);
+
+        // Résoudre les modèles avec les IDs de texture
+        registry.resolve_models();
 
         // Créer le sampler pour l'atlas
         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -437,10 +475,8 @@ impl WgpuState {
         // Initialize egui state
         let egui_state = EguiState::new(window);
 
-        // Créer le registry de voxels
-        let registry = SharedVoxelRegistry::new();
-
         // Enregistrer les blocks avec leurs UVs depuis l'atlas
+        // (le registry a déjà été créé plus haut)
         if !block_configs.is_empty() {
             let mut blocks_data = Vec::new();
             for (string_id, config) in block_configs {
@@ -452,9 +488,11 @@ impl WgpuState {
                     TextureUV::new(u_min, v_min, u_max, v_max, texture_size_in_atlas)
                 };
 
-                let uv_top = get_uv(&config.texture);
-                let uv_side = get_uv(&config.texture_side.as_ref().unwrap_or(&config.texture));
-                let uv_bottom = get_uv(&config.texture_bottom.as_ref().unwrap_or(&config.texture));
+                // Utiliser la texture par défaut si aucune n'est spécifiée
+                let default_tex = config.texture.as_deref().unwrap_or("stone");
+                let uv_top = get_uv(config.texture.as_deref().unwrap_or(default_tex));
+                let uv_side = get_uv(config.texture_side.as_deref().unwrap_or(default_tex));
+                let uv_bottom = get_uv(config.texture_bottom.as_deref().unwrap_or(default_tex));
 
                 blocks_data.push((string_id, config, uv_top, uv_side, uv_bottom));
             }

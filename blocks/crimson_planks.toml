@@ -1,4 +1,4 @@
-name = "Planches de Carmin"
-texture = "crimson_planks"
+name = "Crimson_Planks"
+model = "crimson_planks"
 render_type = "opaque"
 collidable = true

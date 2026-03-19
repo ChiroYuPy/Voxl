@@ -1,4 +1,4 @@
-name = "Buche de Jungle Écorcée"
-texture = "stripped_jungle_log_top"
+name = "Stripped_Jungle_Log"
+model = "stripped_jungle_log"
 render_type = "opaque"
 collidable = true

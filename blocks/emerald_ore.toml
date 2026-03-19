@@ -1,4 +1,4 @@
-name = "Minerai d'Émeraude"
-texture = "emerald_ore"
+name = "Emerald_Ore"
+model = "emerald_ore"
 render_type = "opaque"
 collidable = true

@@ -1,6 +1,4 @@
-name = "Buche d'Acacia"
-texture = "acacia_log_top"
-texture_side = "acacia_log"
-texture_bottom = "acacia_log_top"
+name = "Acacia_Log"
+model = "acacia_log"
 render_type = "opaque"
 collidable = true

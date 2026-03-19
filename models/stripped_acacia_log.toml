@@ -1,0 +1,32 @@
+name = "stripped_acacia_log"
+
+[textures]
+side = "stripped_acacia_log"
+top = "stripped_acacia_log"
+bottom = "stripped_acacia_log_top"
+
+[[elements]]
+from = [0.0, 0.0, 0.0]
+to = [16.0, 16.0, 16.0]
+
+[elements.faces.top]
+texture = "#top"
+enabled = true
+[elements.faces.bottom]
+texture = "#bottom"
+enabled = true
+[elements.faces.north]
+texture = "#side"
+enabled = true
+[elements.faces.south]
+texture = "#side"
+enabled = true
+[elements.faces.east]
+texture = "#side"
+enabled = true
+[elements.faces.west]
+texture = "#side"
+enabled = true
+
+render_type = "opaque"
+collidable = true

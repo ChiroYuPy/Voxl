@@ -1,4 +1,4 @@
-name = "Briques de Pierre Noire Poli Fissurées"
-texture = "cracked_polished_blackstone_bricks"
+name = "Cracked_Polished_Blackstone_Bricks"
+model = "cracked_polished_blackstone_bricks"
 render_type = "opaque"
 collidable = true

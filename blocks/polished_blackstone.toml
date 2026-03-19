@@ -1,4 +1,4 @@
-name = "Pierre Noire Polie"
-texture = "polished_blackstone"
+name = "Polished_Blackstone"
+model = "polished_blackstone"
 render_type = "opaque"
 collidable = true

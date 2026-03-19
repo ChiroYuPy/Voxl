@@ -132,6 +132,13 @@ pub fn generate_texture_atlas(
     println!("Generated texture atlas: {}x{}, {} textures (grid: {}x{}, tex_size: {:.3})",
         atlas_size, atlas_size, texture_uvs.len(), grid_size, grid_size, 1.0 / grid_size as f32);
 
+    // Sauvegarder l'atlas en PNG pour debug
+    if let Err(e) = atlas_image.save("atlas_debug.png") {
+        eprintln!("Warning: Failed to save atlas debug image: {}", e);
+    } else {
+        println!("Saved atlas debug image to atlas_debug.png");
+    }
+
     // Retourner aussi la taille d'une texture dans l'atlas (normalisée 0-1)
     let texture_size_in_atlas = 1.0 / grid_size as f32;
 

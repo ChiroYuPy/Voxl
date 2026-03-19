@@ -1,4 +1,4 @@
-name = "Bloc de Cuivre"
-texture = "copper_block"
+name = "Copper_Block"
+model = "copper_block"
 render_type = "opaque"
 collidable = true

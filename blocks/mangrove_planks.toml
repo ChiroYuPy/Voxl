@@ -1,4 +1,4 @@
-name = "Planches de Mangrove"
-texture = "mangrove_planks"
+name = "Mangrove_Planks"
+model = "mangrove_planks"
 render_type = "opaque"
 collidable = true

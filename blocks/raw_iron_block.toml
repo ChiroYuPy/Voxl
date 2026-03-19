@@ -1,4 +1,4 @@
-name = "Bloc de Fer Brut"
-texture = "raw_iron_block"
+name = "Raw_Iron_Block"
+model = "raw_iron_block"
 render_type = "opaque"
 collidable = true

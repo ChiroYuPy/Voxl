@@ -1,4 +1,4 @@
-name = "Grès Rouge Taillé"
-texture = "cut_red_sandstone"
+name = "Cut_Red_Sandstone"
+model = "cut_red_sandstone"
 render_type = "opaque"
 collidable = true

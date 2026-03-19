@@ -1,4 +1,4 @@
-name = "Briques de Pierre Fissurées"
-texture = "cracked_stone_bricks"
+name = "Cracked_Stone_Bricks"
+model = "cracked_stone_bricks"
 render_type = "opaque"
 collidable = true
