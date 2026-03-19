@@ -10,6 +10,7 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, CursorGrabMode},
 };
+use std::time::Instant;
 
 pub struct App {
     window: Option<Window>,
@@ -20,6 +21,7 @@ pub struct App {
     modifiers: Modifiers,
     selected_block_id: GlobalVoxelId,  // Bloc actuellement sélectionné pour le placement
     was_chat_open: bool,  // État du chat à la frame précédente
+    last_frame_time: Instant,  // Pour le delta time frame-indépendant
 }
 
 impl Default for App {
@@ -33,6 +35,7 @@ impl Default for App {
             modifiers: Modifiers::default(),
             selected_block_id: 3, // Par défaut: stone (global_id 3)
             was_chat_open: false,  // Le chat est fermé au démarrage
+            last_frame_time: Instant::now(),
         }
     }
 }
@@ -506,13 +509,20 @@ impl ApplicationHandler for App {
                 }
             }
 
+            // Calculate delta time for frame-independent movement
+            let now = Instant::now();
+            let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
+            self.last_frame_time = now;
+
+            // Cap delta time to prevent huge jumps (e.g. if window was dragged)
+            let delta_time = delta_time.min(0.1);
+
             // Update player/camera FIRST (before clearing input state)
             // Skip movement if chat is open
             if let Some(wgpu_state) = &mut self.wgpu_state {
 
                 if !wgpu_state.is_chat_open() {
-                    const DELTA_TIME: f32 = 1.0 / 165.0;
-                    self.player.update_direct(wgpu_state.camera_mut(), self.input.state(), DELTA_TIME);
+                    self.player.update_direct(wgpu_state.camera_mut(), self.input.state(), delta_time);
                 }
                 wgpu_state.process_mesh_updates();
             }

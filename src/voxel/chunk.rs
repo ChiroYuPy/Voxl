@@ -4,7 +4,7 @@ pub const CHUNK_SIZE: u32 = 16;
 pub const CHUNK_VOLUME: usize = CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize;
 
 /// Hauteur totale du monde en blocs (peut avoir plusieurs chunks verticaux)
-pub const WORLD_HEIGHT: u32 = 64;
+pub const WORLD_HEIGHT: u32 = 256;
 
 /// Nombre de chunks verticaux nécessaires pour WORLD_HEIGHT
 pub const VERTICAL_CHUNKS: u32 = (WORLD_HEIGHT + CHUNK_SIZE - 1) / CHUNK_SIZE;

@@ -122,7 +122,7 @@ impl Default for KeyBindings {
         ]);
 
         bindings.insert(GameAction::IncreaseSpeed, vec![
-            InputButton::char('+'),
+            InputButton::named(NamedKey::Control),
         ]);
         bindings.insert(GameAction::DecreaseSpeed, vec![
             InputButton::char('-'),

@@ -21,7 +21,7 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Self {
         Self {
-            position: Vec3A::new(32.0, 30.0, 32.0),
+            position: Vec3A::new(0.0, 140.0, 0.0),
             pitch: -0.3,
             yaw: std::f32::consts::PI / 4.0,
         }
