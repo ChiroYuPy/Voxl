@@ -51,6 +51,7 @@ pub enum GameAction {
 
     ToggleFly,
     CycleGameMode,
+    ToggleChunkBorders,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -149,6 +150,11 @@ impl Default for KeyBindings {
         // Cycle gamemode avec G
         bindings.insert(GameAction::CycleGameMode, vec![
             InputButton::char('g'),
+        ]);
+
+        // Toggle chunk borders avec F6
+        bindings.insert(GameAction::ToggleChunkBorders, vec![
+            InputButton::named(NamedKey::F6),
         ]);
 
         Self { bindings }
@@ -396,7 +402,7 @@ impl InputManager {
     }
 }
 
-const ALL_ACTIONS: [GameAction; 23] = [
+const ALL_ACTIONS: [GameAction; 24] = [
     GameAction::MoveForward,
     GameAction::MoveBackward,
     GameAction::MoveLeft,
@@ -420,4 +426,5 @@ const ALL_ACTIONS: [GameAction; 23] = [
     GameAction::OpenChat,
     GameAction::ToggleFly,
     GameAction::CycleGameMode,
+    GameAction::ToggleChunkBorders,
 ];

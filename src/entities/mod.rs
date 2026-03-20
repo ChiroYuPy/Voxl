@@ -1,6 +1,3 @@
-//! Système ECS pour gérer les entités du jeu (joueur, mobs, etc.)
-//! Utilise hecs comme ECS engine.
-
 pub mod components;
 pub mod systems;
 
@@ -12,24 +9,27 @@ use glam::Vec3;
 
 /// Monde des entités (ECS)
 pub struct EntityWorld {
-    world: World,
+    ecs_world: World,
     player_entity: Option<hecs::Entity>,
 }
 
 impl EntityWorld {
     pub fn new() -> Self {
         Self {
-            world: World::new(),
+            ecs_world: World::new(),
             player_entity: None,
         }
     }
 
     /// Crée le joueur et retourne son entity
     pub fn spawn_player(&mut self, position: Vec3) -> hecs::Entity {
-        let entity = self.world.spawn((
+        let mut controlled = PlayerControlled::default();
+        controlled.set_game_mode(GameMode::Spectator);
+
+        let entity = self.ecs_world.spawn((
             Position::new(position),
             Velocity::default(),
-            PlayerControlled::default(),
+            controlled,
             PhysicsAffected::default(),
             AABB::player_size(),
             LookDirection::default(),
@@ -38,25 +38,22 @@ impl EntityWorld {
         entity
     }
 
-    /// Retourne l'entité du joueur si elle existe
     pub fn player_entity(&self) -> Option<hecs::Entity> {
         self.player_entity
     }
 
-    /// Accès direct au monde ECS
     pub fn world(&mut self) -> &mut World {
-        &mut self.world
+        &mut self.ecs_world
     }
 
-    /// Accès immuable au monde ECS
     pub fn world_read(&self) -> &World {
-        &self.world
+        &self.ecs_world
     }
 
     /// Change le mode de jeu du joueur
     pub fn set_game_mode(&mut self, mode: GameMode) -> bool {
         if let Some(player_entity) = self.player_entity {
-            if let Ok(controlled) = self.world.query_one_mut::<&mut PlayerControlled>(player_entity) {
+            if let Ok(controlled) = self.ecs_world.query_one_mut::<&mut PlayerControlled>(player_entity) {
                 println!("[GameMode] Changement: {} -> {}", controlled.get_game_mode().name(), mode.name());
                 controlled.set_game_mode(mode);
                 return true;
@@ -68,7 +65,7 @@ impl EntityWorld {
     /// Toggle le fly mode du joueur (seulement en mode créatif)
     pub fn toggle_fly(&mut self) -> bool {
         if let Some(player_entity) = self.player_entity {
-            if let Ok(controlled) = self.world.query_one_mut::<&mut PlayerControlled>(player_entity) {
+            if let Ok(controlled) = self.ecs_world.query_one_mut::<&mut PlayerControlled>(player_entity) {
                 let old_fly = controlled.is_flying();
                 controlled.toggle_fly();
                 let new_fly = controlled.is_flying();
@@ -82,7 +79,7 @@ impl EntityWorld {
     /// Retourne le mode de jeu actuel du joueur
     pub fn get_game_mode(&self) -> Option<GameMode> {
         if let Some(player_entity) = self.player_entity {
-            let entity_ref = self.world.entity(player_entity).ok()?;
+            let entity_ref = self.ecs_world.entity(player_entity).ok()?;
             let controlled = entity_ref.get::<&PlayerControlled>()?;
             return Some(*controlled.get_game_mode());
         }

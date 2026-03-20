@@ -1,0 +1,33 @@
+//! Plaines - biome tempéré par défaut
+Biome(
+    id: "plains",
+    temperature: 0.8,
+    humidity: 0.4,
+    has_precipitation: true,
+
+    // Features par couche
+    features: [
+        // Surface (arbres, herbe, fleurs)
+        [
+            FeatureEntry(name: "grass", chance: 1.0),
+            FeatureEntry(name: "flower", chance: 0.05),
+        ],
+        // Sous-sol (minerais communs)
+        [
+            FeatureEntry(name: "coal_ore", chance: 0.1),
+            FeatureEntry(name: "iron_ore", chance: 0.08),
+        ],
+        // Profond (minerais rares)
+        [
+            FeatureEntry(name: "diamond_ore", chance: 0.01),
+        ],
+        // Bedrock level
+        [],
+    ],
+
+    surface: SurfaceRule(
+        top_material: "grass",
+        under_material: Some("dirt"),
+        depth: 4,
+    ),
+)

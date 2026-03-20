@@ -1,15 +1,42 @@
-use crate::voxel::{VoxelWorld, ChunkPos, GlobalVoxelId, SharedVoxelRegistry, TextureUV, VoxelFace};
-use crate::renderer::voxel_map::{DirtyChunkSet, generate_chunk_mesh};
+use crate::voxel::{VoxelWorld, ChunkPos, GlobalVoxelId, SharedVoxelRegistry, TextureUV, VoxelFace, CHUNK_SIZE, VoxelChunk, chunk::VERTICAL_CHUNKS};
+use crate::renderer::chunk_tracker::SharedChunkTracker;
+use crate::renderer::queue_system::{ChunkGenerationQueue, MeshQueue, MeshPriority};
+use crate::renderer::pipeline::ChunkBorderVertex;
 use crate::renderer::VoxelVertex;
-use crate::renderer::mesh_system::MeshBuildSystem;
-use crate::terrain::TerrainGenerator;
+use crate::worldgen::WorldGenerator;
 use crate::debug::EguiState;
 use crate::entities::EntityWorld;
 use winit::window::Window;
 use glam::{Mat4, Vec3A};
 use wgpu::util::DeviceExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
+
+/// Modes d'affichage des bordures de chunks
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChunkBorderMode {
+    Disabled,
+    ChunkBorders,      // Lignes entre les chunks seulement
+    FullGrid,          // Lignes entre chunks + grille 16x16
+}
+
+impl ChunkBorderMode {
+    pub fn next(self) -> Self {
+        match self {
+            ChunkBorderMode::Disabled => ChunkBorderMode::ChunkBorders,
+            ChunkBorderMode::ChunkBorders => ChunkBorderMode::FullGrid,
+            ChunkBorderMode::FullGrid => ChunkBorderMode::Disabled,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChunkBorderMode::Disabled => "désactivé",
+            ChunkBorderMode::ChunkBorders => "bordures de chunks",
+            ChunkBorderMode::FullGrid => "grille complète",
+        }
+    }
+}
 
 /// Structure de caméra
 #[derive(Clone, Copy)]
@@ -22,7 +49,7 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Self {
         Self {
-            position: Vec3A::new(0.0, 140.0, 0.0),
+            position: Vec3A::new(0.0, 80.0, 0.0),
             pitch: -0.3,
             yaw: std::f32::consts::PI / 4.0,
         }
@@ -137,14 +164,25 @@ pub struct WgpuState {
     _highlight_time_bind_group_layout: wgpu::BindGroupLayout,
     highlight_time_buffer: wgpu::Buffer,
     highlight_time_bind_group: wgpu::BindGroup,
+    _chunk_border_pipeline: wgpu::RenderPipeline,
+    chunk_border_camera_bind_group: wgpu::BindGroup,
+    chunk_border_vertex_buffer: wgpu::Buffer,
+    chunk_border_vertex_count: u32,
+    chunk_border_mode: ChunkBorderMode,
     queue: wgpu::Queue,
     device: wgpu::Device,
 
     // Monde voxel et meshs dynamiques
     world: Arc<RwLock<VoxelWorld>>,
     chunk_meshes: HashMap<ChunkPos, ChunkMesh>,
-    mesh_rebuild: MeshBuildSystem,
-    dirty_chunks: DirtyChunkSet,
+
+    // NOUVEAU: Système de files d'attente et tracker
+    chunk_tracker: SharedChunkTracker,
+    chunk_gen_queue: Option<ChunkGenerationQueue>,
+    mesh_queue: Option<MeshQueue>,
+
+    // Pending mesh requests (batching pour éviter les duplicats lors de la génération)
+    pending_mesh_requests: HashSet<ChunkPos>,
 
     // Monde des entités ECS
     entity_world: EntityWorld,
@@ -156,6 +194,12 @@ pub struct WgpuState {
 
     // Temps écoulé depuis le début (pour l'animation de l'overlay)
     start_time: std::time::Instant,
+
+    // Timer pour le logging de statut
+    last_status_log: std::time::Instant,
+    // Système de ticks (10 ticks par seconde = 100ms par tick)
+    tick_accumulator: std::time::Duration,
+    last_tick_time: std::time::Instant,
 
     // Camera pour les déplacements
     camera: Camera,
@@ -474,6 +518,30 @@ impl WgpuState {
             }],
         });
 
+        // Créer le pipeline de bordure de chunk
+        let (chunk_border_pipeline, chunk_border_camera_layout) =
+            crate::renderer::pipeline::create_chunk_border_pipeline(&device, &surface_config);
+
+        let chunk_border_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Chunk Border Camera Bind Group"),
+            layout: &chunk_border_camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+
+        // Créer le buffer de vertex pour les lignes de chunk (initialement vide)
+        // Mode FullGrid optimisé avec lignes continues: ~280 vertices per chunk × 125 chunks = ~35000
+        const CHUNK_BORDER_INITIAL_VERTICES: usize = 50000;
+        let chunk_border_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Chunk Border Vertex Buffer"),
+            size: (CHUNK_BORDER_INITIAL_VERTICES * std::mem::size_of::<ChunkBorderVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let chunk_border_vertex_count = 0u32;
+
         let start_time = std::time::Instant::now();
 
         // Initialize egui state
@@ -510,28 +578,32 @@ impl WgpuState {
             registry.register_voxel("stone", "Stone", 3);
         }
 
-        // Générer le monde voxel
-        let mut world = VoxelWorld::new(registry.clone());
-        let generator = TerrainGenerator::new();
-        generator.generate_test_world(&mut world);
-
+        // Créer le monde voxel vide - PAS DE GÉNÉRATION SYNCHRONE
+        // Le jeu démarre instantanément, les chunks apparaîtront progressivement
+        let world = VoxelWorld::new(registry.clone());
         let world_arc = Arc::new(RwLock::new(world));
 
-        // Créer le système de rebuild de meshs
-        let mesh_rebuild = MeshBuildSystem::new(world_arc.clone());
+        // Créer le générateur de monde data-driven
+        let mut worldgen = WorldGenerator::default();
+        worldgen.init_block_ids(&registry);
 
-        // Générer les meshs initiaux pour tous les chunks
-        let chunk_meshes = Self::generate_initial_meshes(&device, &world_arc);
+        // NOUVEAU: Créer le tracker et les files d'attente
+        let chunk_tracker = SharedChunkTracker::new();
+        let chunk_gen_queue = ChunkGenerationQueue::new(world_arc.clone(), &worldgen, 4);
+        let mesh_queue = MeshQueue::new(world_arc.clone(), 2);
 
-        println!("Generated {} chunk meshes", chunk_meshes.len());
+        println!("[WorldGen] Queue system ready - chunk gen (4 workers), mesh (2 workers)");
+
+        // Pas de meshs initiaux - ils seront générés progressivement
+        let chunk_meshes = HashMap::new();
 
         // Initialize egui renderer
         let egui_renderer = egui_wgpu::Renderer::new(&device, surface_config.format, None, 1);
 
         // Créer le monde des entités ECS
         let mut entity_world = EntityWorld::new();
-        // Spawner le joueur à la position de spawn (même position que la caméra par défaut)
-        let spawn_pos = glam::Vec3::new(0.0, 140.0, 0.0);
+        // Spawner le joueur à une position proche du niveau du terrain (Y≈70)
+        let spawn_pos = glam::Vec3::new(0.0, 80.0, 0.0);
         entity_world.spawn_player(spawn_pos);
         println!("Player entity spawned at ({}, {}, {})", spawn_pos.x, spawn_pos.y, spawn_pos.z);
 
@@ -551,17 +623,27 @@ impl WgpuState {
             _highlight_time_bind_group_layout: highlight_time_bind_group_layout,
             highlight_time_buffer,
             highlight_time_bind_group,
+            _chunk_border_pipeline: chunk_border_pipeline,
+            chunk_border_camera_bind_group,
+            chunk_border_vertex_buffer,
+            chunk_border_vertex_count,
+            chunk_border_mode: ChunkBorderMode::Disabled,
             queue,
             device,
             world: world_arc,
             chunk_meshes,
-            mesh_rebuild,
-            dirty_chunks: DirtyChunkSet::new(),
+            chunk_tracker,
+            chunk_gen_queue: Some(chunk_gen_queue),
+            mesh_queue: Some(mesh_queue),
+            pending_mesh_requests: HashSet::new(),
             entity_world,
             highlight_vertex_buffer: None,
             highlight_face_buffer: None,
             highlight_target: None,
             start_time,
+            last_status_log: std::time::Instant::now(),
+            tick_accumulator: std::time::Duration::ZERO,
+            last_tick_time: std::time::Instant::now(),
             camera: Camera::new(),
             egui_state,
             egui_renderer,
@@ -572,45 +654,34 @@ impl WgpuState {
         }
     }
 
-    /// Générer les meshs initiaux pour tous les chunks
-    fn generate_initial_meshes(device: &wgpu::Device, world: &Arc<RwLock<VoxelWorld>>) -> HashMap<ChunkPos, ChunkMesh> {
-        let mut chunk_meshes = HashMap::new();
-
-        let world_read = world.read().unwrap();
-        let registry = world_read.registry();
-        for (&(cx, cy, cz), chunk) in world_read.chunks_iter() {
-            let vertices = generate_chunk_mesh(chunk, &world_read, cx, cy, cz, registry);
-
-            if !vertices.is_empty() {
-                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("Chunk Mesh ({}, {}, {})", cx, cy, cz)),
-                    contents: bytemuck::cast_slice(&vertices),
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                });
-
-                chunk_meshes.insert((cx, cy, cz), ChunkMesh {
-                    vertex_buffer,
-                    vertex_count: vertices.len() as u32,
-                });
-            }
-        }
-
-        chunk_meshes
-    }
-
-    /// Définir un voxel et marquer les chunks comme dirty
+    /// Définir un voxel et marquer les chunks affectés pour remeshing (priorité haute)
+    /// Les chunks sont déterminés intelligemment: seuls ceux impactés par la modification sont remeshés
     pub fn set_voxel(&mut self, x: i32, y: i32, z: i32, global_id: Option<GlobalVoxelId>) {
+        // Collecter les chunks à mesher (avec déduplication via HashSet)
+        let mut chunks_to_mesh = std::collections::HashSet::new();
+
         if let Ok(mut world) = self.world.write() {
             let result = world.set_voxel(x, y, z, global_id);
 
-            // Marquer le chunk modifié comme dirty
+            // Ajouter le chunk modifié
             let (cx, cy, cz) = result.modified_chunk;
-            self.dirty_chunks.mark_dirty(cx, cy, cz);
-
-            // Marquer les chunks voisins comme dirty
-            for (nx, ny, nz) in result.neighbor_chunks {
-                self.dirty_chunks.mark_dirty(nx, ny, nz);
+            if cy >= 0 && cy < VERTICAL_CHUNKS as i32 {
+                chunks_to_mesh.insert((cx, cy, cz));
             }
+
+            // Ajouter les chunks voisins affectés (seulement ceux où le bloc est sur le bord)
+            for (nx, ny, nz) in result.neighbor_chunks {
+                if ny >= 0 && ny < VERTICAL_CHUNKS as i32 {
+                    chunks_to_mesh.insert((nx, ny, nz));
+                }
+            }
+        } // Le lock est relâché ici
+
+        // Demander le mesh pour tous les chunks uniques affectés (priorité haute)
+        // NOTE: On ne demande PAS les voisins supplémentaires car les voisins impactés
+        // sont déjà inclus dans `result.neighbor_chunks`
+        for (cx, cy, cz) in chunks_to_mesh {
+            self.request_mesh_single(cx, cy, cz, MeshPriority::Modified);
         }
     }
 
@@ -771,41 +842,534 @@ impl WgpuState {
         vertices
     }
 
-    /// Traiter les mises à jour de meshs (meshs rebuildés)
-    pub fn process_mesh_updates(&mut self) {
-        // Poll les meshs rebuildés
-        while let Some(rebuilt) = self.mesh_rebuild.try_recv() {
-            if rebuilt.vertices.is_empty() {
-                // Si le mesh est vide, supprimer le chunk du hashmap
-                self.chunk_meshes.remove(&rebuilt.chunk_pos);
-            } else {
-                let (cx, cy, cz) = rebuilt.chunk_pos;
-                let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("Chunk Mesh ({}, {}, {})", cx, cy, cz)),
-                    contents: bytemuck::cast_slice(&rebuilt.vertices),
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                });
+    /// Génère les vertices pour les bordures de chunks autour du joueur
+    /// Rayon: 5x5x5 chunks autour du chunk du joueur
+    fn update_chunk_border_vertices(&mut self) {
+        let mode = self.chunk_border_mode;
+        if mode == ChunkBorderMode::Disabled {
+            self.chunk_border_vertex_count = 0;
+            return;
+        }
 
-                self.chunk_meshes.insert(rebuilt.chunk_pos, ChunkMesh {
-                    vertex_buffer,
-                    vertex_count: rebuilt.vertices.len() as u32,
-                });
+        let player_pos = self.camera.position;
+        let player_chunk_x = (player_pos.x / CHUNK_SIZE as f32).floor() as i32;
+        let player_chunk_y = (player_pos.y / CHUNK_SIZE as f32).floor() as i32;
+        let player_chunk_z = (player_pos.z / CHUNK_SIZE as f32).floor() as i32;
+
+        const RADIUS: i32 = 2; // 5x5x5 = -2 to +2
+
+        let mut vertices = Vec::new();
+
+        // Couleurs style Minecraft
+        // Noir pour les bordures de chunks (plus visibles)
+        const CHUNK_BORDER_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.8];  // Noir avec alpha 0.8
+        // Blanc pour la grille interne (très visible)
+        const GRID_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.8];  // Blanc avec alpha 0.8
+
+        let full_grid = mode == ChunkBorderMode::FullGrid;
+
+        // Pour chaque chunk dans le rayon
+        for dx in -RADIUS..=RADIUS {
+            for dy in -RADIUS..=RADIUS {
+                for dz in -RADIUS..=RADIUS {
+                    let cx = player_chunk_x + dx;
+                    let cy = player_chunk_y + dy;
+                    let cz = player_chunk_z + dz;
+
+                    // Skip si hors limites verticales
+                    if cy < 0 || cy >= VERTICAL_CHUNKS as i32 {
+                        continue;
+                    }
+
+                    // Position monde du chunk
+                    let world_x = cx * CHUNK_SIZE as i32;
+                    let world_y = cy * CHUNK_SIZE as i32;
+                    let world_z = cz * CHUNK_SIZE as i32;
+
+                    let chunk_size_f = CHUNK_SIZE as f32;
+                    let x0 = world_x as f32;
+                    let y0 = world_y as f32;
+                    let z0 = world_z as f32;
+                    let x1 = x0 + chunk_size_f;
+                    let y1 = y0 + chunk_size_f;
+                    let z1 = z0 + chunk_size_f;
+
+                    // Helper pour ajouter une ligne
+                    let mut add_line = |x1: f32, y1: f32, z1: f32, x2: f32, y2: f32, z2: f32, color: [f32; 4]| {
+                        vertices.push(ChunkBorderVertex { position: [x1, y1, z1], color });
+                        vertices.push(ChunkBorderVertex { position: [x2, y2, z2], color });
+                    };
+
+                    // Bordures du chunk (arêtes extérieures) - toujours affichées
+                    // Arêtes verticales (4 coins)
+                    add_line(x0, y0, z0, x0, y1, z0, CHUNK_BORDER_COLOR);
+                    add_line(x1, y0, z0, x1, y1, z0, CHUNK_BORDER_COLOR);
+                    add_line(x0, y0, z1, x0, y1, z1, CHUNK_BORDER_COLOR);
+                    add_line(x1, y0, z1, x1, y1, z1, CHUNK_BORDER_COLOR);
+
+                    // Arêtes horizontales en bas
+                    add_line(x0, y0, z0, x1, y0, z0, CHUNK_BORDER_COLOR);
+                    add_line(x1, y0, z0, x1, y0, z1, CHUNK_BORDER_COLOR);
+                    add_line(x1, y0, z1, x0, y0, z1, CHUNK_BORDER_COLOR);
+                    add_line(x0, y0, z1, x0, y0, z0, CHUNK_BORDER_COLOR);
+
+                    // Arêtes horizontales en haut
+                    add_line(x0, y1, z0, x1, y1, z0, CHUNK_BORDER_COLOR);
+                    add_line(x1, y1, z0, x1, y1, z1, CHUNK_BORDER_COLOR);
+                    add_line(x1, y1, z1, x0, y1, z1, CHUNK_BORDER_COLOR);
+                    add_line(x0, y1, z1, x0, y1, z0, CHUNK_BORDER_COLOR);
+
+                    // Grille interne (lignes tous les blocs) - seulement sur le chunk actuel du joueur
+                    if full_grid && dx == 0 && dy == 0 && dz == 0 {
+                        // Lignes verticales internes sur les 4 faces latérales
+                        for ix in 1..16 {
+                            let x = x0 + ix as f32;
+                            add_line(x, y0, z0, x, y1, z0, GRID_COLOR);  // Face avant
+                            add_line(x, y0, z1, x, y1, z1, GRID_COLOR);  // Face arrière
+                        }
+                        for iz in 1..16 {
+                            let z = z0 + iz as f32;
+                            add_line(x0, y0, z, x0, y1, z, GRID_COLOR);  // Face gauche
+                            add_line(x1, y0, z, x1, y1, z, GRID_COLOR);  // Face droite
+                        }
+
+                        // Lignes horizontales continues sur les 4 faces latérales (pour chaque niveau Y)
+                        for iy in 1..16 {
+                            let y = y0 + iy as f32;
+                            add_line(x0, y, z0, x1, y, z0, GRID_COLOR);  // Face avant
+                            add_line(x0, y, z1, x1, y, z1, GRID_COLOR);  // Face arrière
+                            add_line(x0, y, z0, x0, y, z1, GRID_COLOR);  // Face gauche
+                            add_line(x1, y, z0, x1, y, z1, GRID_COLOR);  // Face droite
+                        }
+
+                        // Grille au sol (Y = 0) - lignes horizontales
+                        for ix in 1..16 {
+                            let x = x0 + ix as f32;
+                            add_line(x, y0, z0, x, y0, z1, GRID_COLOR);  // Lignes Z
+                        }
+                        for iz in 1..16 {
+                            let z = z0 + iz as f32;
+                            add_line(x0, y0, z, x1, y0, z, GRID_COLOR);  // Lignes X
+                        }
+
+                        // Grille au plafond (Y = 16) - lignes horizontales
+                        for ix in 1..16 {
+                            let x = x0 + ix as f32;
+                            add_line(x, y1, z0, x, y1, z1, GRID_COLOR);  // Lignes Z
+                        }
+                        for iz in 1..16 {
+                            let z = z0 + iz as f32;
+                            add_line(x0, y1, z, x1, y1, z, GRID_COLOR);  // Lignes X
+                        }
+                    }
+                }
             }
         }
 
-        // Demander le rebuild des chunks dirty
-        let dirty = self.dirty_chunks.take_dirty();
-        if !dirty.is_empty() {
-            self.mesh_rebuild.request_rebuild_many(&dirty);
+        self.chunk_border_vertex_count = vertices.len() as u32;
+
+        // Upload to GPU
+        self.queue.write_buffer(&self.chunk_border_vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+    }
+
+    /// Traiter les mises à jour de chunks et meshs (appelé chaque frame)
+    pub fn process_updates(&mut self) {
+        // Accumuler le temps écoulé
+        let now = std::time::Instant::now();
+        let delta = now.duration_since(self.last_tick_time);
+        self.last_tick_time = now;
+        self.tick_accumulator = self.tick_accumulator.saturating_add(delta);
+
+        // Const TICK_DURATION: 100ms = 10 ticks/seconde
+        const TICK_DURATION: std::time::Duration = std::time::Duration::from_millis(100);
+        // Max 3 ticks par frame pour éviter spiral of death (si lag)
+        const MAX_TICKS_PER_FRAME: u32 = 3;
+
+        let mut ticks_processed = 0;
+        while self.tick_accumulator >= TICK_DURATION && ticks_processed < MAX_TICKS_PER_FRAME {
+            self.tick_accumulator = self.tick_accumulator.saturating_sub(TICK_DURATION);
+            self.process_tick();
+            ticks_processed += 1;
         }
 
-        // Mettre à jour le highlight
+        // Opérations per-frame (pas limitées par les ticks)
+        // 1. Traiter les chunks générés (arrivant de la file)
+        self.process_generated_chunks();
+
+        // 2. Mettre à jour le highlight (per-frame pour responsiveness)
         self.update_highlight_mesh();
+
+        // 3. Log de statut (toutes les secondes, pas lié aux ticks)
+        const LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        if self.last_status_log.elapsed() >= LOG_INTERVAL {
+            self.last_status_log = std::time::Instant::now();
+
+            let (pending_gen, generating, pending_mesh) = self.chunk_tracker.get_stats();
+            let generated_count = if let Ok(world) = self.world.read() {
+                world.chunk_count()
+            } else {
+                0
+            };
+            let meshed_count = self.chunk_meshes.len();
+
+            // Calculer combien de chunks devraient exister (autour du joueur)
+            let load_radius = 4;
+            let vertical_radius = 2;
+            let horizontal_size = load_radius * 2 + 1;  // 9
+            let expected_count = horizontal_size * horizontal_size * (vertical_radius * 2 + 1);  // 9*9*5 = 405
+
+            eprintln!("[Chunks] expected: {} | generated: {} | meshed: {} | pending_gen: {} | generating: {} | pending_mesh: {}",
+                expected_count, generated_count, meshed_count, pending_gen, generating, pending_mesh);
+        }
+
+        // 4. Flush les requêtes de mesh en attente (batching pour éviter les duplicats)
+        // IMPORTANT: Doit être APRÈS process_generated_chunks() car c'est là que les nouveaux chunks
+        // ajoutent leurs voisins au pending set
+        self.flush_pending_mesh_requests();
+    }
+
+    /// Traitement d'un tick (10 fois par seconde, frame-independent)
+    fn process_tick(&mut self) {
+        // Compteur de ticks pour les opérations périodiques
+        // On utilise un compteur statique local à la fonction
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static TICK_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        let tick = TICK_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        // 1. Tous les ticks: demander des chunks (max 4 par tick)
+        self.request_chunks_tick(4);
+
+        // 2. Traiter les meshs terminés (max 20 par tick = 200/seconde)
+        self.process_meshes_tick(20);  // 20 meshes per tick = 200/second
+
+        // 3. Cleanup désactivé temporairement (causait des race conditions)
+        // Les chunks dans pending_generation seront nettoyés quand leurs signaux already_exists arrivent
+        // if tick % 50 == 0 {
+        //     self.cleanup_orphaned_states();
+        // }
+
+        // 4. Cleanup out-of-bounds désactivé temporairement (causait des race conditions)
+        // if tick % 10 == 0 {
+        //     self.chunk_tracker.cleanup_out_of_bounds(VERTICAL_CHUNKS as i32);
+        // }
+    }
+
+    /// Traiter les meshs terminés (tick-based, max `max_count` par tick)
+    fn process_meshes_tick(&mut self, max_count: usize) {
+        let Some(ref mesh_queue) = self.mesh_queue else {
+            return;
+        };
+
+        let mut processed = 0;
+        while processed < max_count {
+            if let Some(result) = mesh_queue.try_recv() {
+                let pos = (result.cx, result.cy, result.cz);
+
+                if result.vertices.is_empty() {
+                    // Mesh vide = chunk vide, retirer du cache
+                    self.chunk_meshes.remove(&pos);
+                    self.chunk_tracker.mark_meshed(pos);
+                } else if result.vertices.len() < 200000 {
+                    // Créer le buffer GPU (remplace l'ancien mesh si existant)
+                    let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some(&format!("Chunk Mesh ({}, {}, {})", result.cx, result.cy, result.cz)),
+                        contents: bytemuck::cast_slice(&result.vertices),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    });
+
+                    // NOTE: Le mesh est remplacé SEULEMENT maintenant, pas avant
+                    // Donc l'ancien mesh reste visible jusqu'à ce que le nouveau soit prêt
+                    self.chunk_meshes.insert(pos, ChunkMesh {
+                        vertex_buffer,
+                        vertex_count: result.vertices.len() as u32,
+                    });
+                    self.chunk_tracker.mark_meshed(pos);
+                } else {
+                    // Mesh trop grand, juste marquer comme meshé
+                    self.chunk_tracker.mark_meshed(pos);
+                }
+                processed += 1;
+            } else {
+                break; // Plus de meshs à traiter
+            }
+        }
+    }
+
+    /// Version legacy pour compatibilité
+    pub fn process_mesh_updates(&mut self) {
+        self.process_updates();
     }
 
     /// Demander un rebuild immédiat pour un chunk spécifique
     pub fn request_immediate_rebuild(&mut self, cx: i32, cy: i32, cz: i32) {
-        self.dirty_chunks.mark_dirty(cx, cy, cz);
+        self.request_mesh_single(cx, cy, cz, MeshPriority::Modified);
+    }
+
+    /// Traiter les chunks qui viennent d'être générés
+    fn process_generated_chunks(&mut self) {
+        // Collecter d'abord tous les résultats
+        let mut results = Vec::new();
+        if let Some(ref gen_queue) = self.chunk_gen_queue {
+            const MAX_PER_FRAME: usize = 5;
+            for _ in 0..MAX_PER_FRAME {
+                if let Some(result) = gen_queue.try_recv() {
+                    results.push(result);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Traiter les résultats (sans lock sur gen_queue)
+        for result in results {
+            let pos = (result.cx, result.cy, result.cz);
+
+            // Cas 1: Le chunk existait déjà (signal du worker - race condition)
+            // On le marque juste comme généré pour retirer de pending_generation
+            if result.already_exists {
+                self.chunk_tracker.mark_generated(pos);
+                // IMPORTANT: NE PAS demander les voisins ici !
+                // Le chunk existe mais n'a peut-être pas de mesh, donc on demande juste son mesh
+                if !self.chunk_tracker.is_meshing_or_pending(&pos) {
+                    self.request_mesh_single(result.cx, result.cy, result.cz, MeshPriority::New);
+                }
+                continue;
+            }
+
+            // Cas 2: Nouvelle génération de chunk
+            let Some(voxels) = result.voxels else {
+                continue; // Ne devrait pas arriver si already_exists == false
+            };
+            let Some(palette) = result.palette else {
+                continue;
+            };
+
+            // Vérifier que le chunk n'existe pas déjà (race condition check)
+            let already_exists_in_world = if let Ok(world) = self.world.read() {
+                world.get_chunk_existing(result.cx, result.cy, result.cz).is_some()
+            } else {
+                false
+            };
+
+            if already_exists_in_world {
+                // Le chunk a été inséré entre temps, marquer comme généré
+                self.chunk_tracker.mark_generated(pos);
+                continue;
+            }
+
+            // Insérer le chunk dans le monde
+            let chunk = VoxelChunk::from_data(voxels, palette);
+            if let Ok(mut world) = self.world.write() {
+                world.insert_chunk(result.cx, result.cy, result.cz, chunk);
+            }
+
+            // Marquer comme généré
+            self.chunk_tracker.mark_generated(pos);
+
+            // Demander le mesh pour le chunk et ses voisins
+            self.request_mesh_for_chunk_and_neighbors(result.cx, result.cy, result.cz);
+        }
+    }
+
+    /// Demande le mesh pour un chunk et ses voisins
+    /// Utilisé quand un chunk est nouvellement généré:
+    /// - Le chunk lui-même et ses voisins sont ajoutés au pending set (batching)
+    /// - Les voisins qui existent déjà sont marqués pour remesh (pour mettre à jour les faces de bord)
+    /// NOTE: Les requêtes ne sont PAS envoyées immédiatement - elles sont batchées
+    /// et envoyées à la fin du tick via flush_pending_mesh_requests()
+    fn request_mesh_for_chunk_and_neighbors(&mut self, cx: i32, cy: i32, cz: i32) {
+        // Ajouter le chunk lui-même au pending set
+        self.pending_mesh_requests.insert((cx, cy, cz));
+
+        // Vérifier une fois quels chunks existent pour les voisins
+        let existing_neighbors: Vec<(i32, i32, i32)> = if let Ok(world) = self.world.read() {
+            let potential_neighbors = [
+                (cx + 1, cy, cz), (cx - 1, cy, cz),
+                (cx, cy + 1, cz), (cx, cy - 1, cz),
+                (cx, cy, cz + 1), (cx, cy, cz - 1),
+            ];
+
+            potential_neighbors.iter()
+                .filter(|(nx, ny, nz)| {
+                    *ny >= 0 && *ny < VERTICAL_CHUNKS as i32 &&
+                    world.get_chunk_existing(*nx, *ny, *nz).is_some()
+                })
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Ajouter les voisins existants au pending set
+        // Ils seront meshés une seule fois à la fin du tick, même si demandés plusieurs fois
+        for (nx, ny, nz) in existing_neighbors {
+            self.pending_mesh_requests.insert((nx, ny, nz));
+        }
+    }
+
+    /// Envoie toutes les requêtes de mesh en attente au mesh queue
+    /// Appelé à la fin de chaque tick pour batcher les requêtes et éviter les duplicats
+    fn flush_pending_mesh_requests(&mut self) {
+        if self.pending_mesh_requests.is_empty() {
+            return;
+        }
+
+        let Some(ref mesh_queue) = self.mesh_queue else {
+            return;
+        };
+
+        // Prendre toutes les positions en attente
+        let positions: Vec<ChunkPos> = self.pending_mesh_requests.drain().collect();
+
+        // Vérifier une fois quels chunks existent (avant de boucler)
+        let existing_chunks: Vec<ChunkPos> = if let Ok(world) = self.world.read() {
+            positions.iter()
+                .filter(|(cx, cy, cz)| {
+                    *cy >= 0 && *cy < VERTICAL_CHUNKS as i32 &&
+                    world.get_chunk_existing(*cx, *cy, *cz).is_some()
+                })
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Envoyer les requêtes de mesh pour tous les chunks existants
+        for (cx, cy, cz) in existing_chunks {
+            let pos = (cx, cy, cz);
+
+            // Vérifier si déjà en cours de meshing
+            if !self.chunk_tracker.is_meshing_or_pending(&pos) {
+                self.chunk_tracker.mark_pending_mesh_direct(pos);
+                mesh_queue.request_mesh(cx, cy, cz, MeshPriority::New);
+            }
+        }
+    }
+
+    /// Demande le mesh pour un seul chunk (sans duplication)
+    fn request_mesh_single(&mut self, cx: i32, cy: i32, cz: i32, priority: MeshPriority) {
+        // Vérifier que le chunk existe
+        let exists = if let Ok(world) = self.world.read() {
+            world.get_chunk_existing(cx, cy, cz).is_some()
+        } else {
+            false
+        };
+
+        if !exists {
+            return; // Le chunk n'existe pas encore, on ne demande pas le mesh
+        }
+
+        let pos = (cx, cy, cz);
+
+        // Pour les requêtes de haute priorité (bloc modifié), on force le remesh
+        let is_high_priority = priority == MeshPriority::Modified;
+        if is_high_priority {
+            // Nettoyer tous les états de meshing pour forcer un remesh complet
+            self.chunk_tracker.clear_mesh_state(pos);
+        }
+
+        // Vérifier si déjà en cours de meshing
+        let already_meshing = self.chunk_tracker.is_meshing_or_pending(&pos);
+
+        if !already_meshing {
+            self.chunk_tracker.mark_pending_mesh_direct(pos);
+
+            if let Some(ref mesh_queue) = self.mesh_queue {
+                mesh_queue.request_mesh(cx, cy, cz, priority);
+            }
+        }
+    }
+
+    /// Nettoyer les états orphelins (chunks générés mais encore marqués pending)
+    /// Appelé depuis le tick système (tous les 50 ticks = 5 secondes)
+    fn cleanup_orphaned_states(&mut self) {
+        // Nettoyer pending_generation en vérifiant directement dans le monde
+        let world = self.world.clone();
+        self.chunk_tracker.cleanup_pending_generation_verify(|pos| {
+            if let Ok(w) = world.read() {
+                w.get_chunk_existing(pos.0, pos.1, pos.2).is_some()
+            } else {
+                false
+            }
+        });
+    }
+
+    /// Demander la génération des chunks autour du joueur (tick-based)
+    /// Appelé 10 fois par seconde, max `max_count` chunks par tick
+    /// Priorité par distance au joueur (plus proches d'abord)
+    fn request_chunks_tick(&mut self, max_count: usize) {
+        let Some(ref gen_queue) = self.chunk_gen_queue else {
+            return;
+        };
+
+        let player_pos = self.camera.position;
+        let player_chunk_x = (player_pos.x / CHUNK_SIZE as f32).floor() as i32;
+        let player_chunk_y = (player_pos.y / CHUNK_SIZE as f32).floor() as i32;
+        let player_chunk_z = (player_pos.z / CHUNK_SIZE as f32).floor() as i32;
+
+        // Rayon de chargement (en chunks)
+        const LOAD_RADIUS: i32 = 1;
+        const VERTICAL_RADIUS: i32 = 1;
+
+        // Collecter tous les chunks à vérifier avec leur distance au joueur
+        let mut chunks_to_request: Vec<(i32, i32, i32, f32)> = Vec::new();
+
+        for dx in -LOAD_RADIUS..=LOAD_RADIUS {
+            for dz in -LOAD_RADIUS..=LOAD_RADIUS {
+                for dy in -VERTICAL_RADIUS..=VERTICAL_RADIUS {
+                    let cx = player_chunk_x + dx;
+                    let cy = player_chunk_y + dy;
+                    let cz = player_chunk_z + dz;
+                    let pos = (cx, cy, cz);
+
+                    // Skip si hors des limites du monde (vertical)
+                    if cy < 0 || cy >= VERTICAL_CHUNKS as i32 {
+                        continue;
+                    }
+
+                    // Skip si déjà en cours de génération ou généré
+                    if self.chunk_tracker.is_generating(&pos) {
+                        continue;
+                    }
+
+                    // Skip si déjà généré
+                    if self.chunk_tracker.is_generated(&pos) {
+                        continue;
+                    }
+
+                    // Calculer la distance au joueur (world space)
+                    let dx_world = (cx * CHUNK_SIZE as i32) as f32 - player_pos.x;
+                    let dy_world = (cy * CHUNK_SIZE as i32) as f32 - player_pos.y;
+                    let dz_world = (cz * CHUNK_SIZE as i32) as f32 - player_pos.z;
+                    let dist_sq = dx_world * dx_world + dy_world * dy_world + dz_world * dz_world;
+
+                    chunks_to_request.push((cx, cy, cz, dist_sq));
+                }
+            }
+        }
+
+        // Trier par distance (plus proches d'abord = priorité haute)
+        chunks_to_request.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Demander seulement max_count chunks ce tick
+        for (cx, cy, cz, _) in chunks_to_request.into_iter().take(max_count) {
+            let pos = (cx, cy, cz);
+            // Double-check (un autre tick aurait pu avoir généré le chunk entre-temps)
+            if self.chunk_tracker.is_generated(&pos) || self.chunk_tracker.is_generating(&pos) {
+                continue;
+            }
+            if self.chunk_tracker.mark_pending_generation(pos) {
+                gen_queue.request_chunk(cx, cy, cz, 0);
+            }
+        }
+    }
+
+    /// Version legacy pour compatibilité (plus utilisée, remplacée par request_chunks_tick)
+    #[allow(dead_code)]
+    fn request_chunks_around_player(&mut self) {
+        // Cette fonction n'est plus appelée, remplacée par request_chunks_tick
+        // mais la garde pour compatibilité au cas où
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -839,6 +1403,11 @@ impl WgpuState {
 
     pub fn render(&mut self, selected_block: (u32, String)) -> Result<(), wgpu::SurfaceError> {
         self.egui_state.update_fps();
+
+        // Mettre à jour les bordures de chunks avant le rendu (seulement si pas désactivé)
+        if self.chunk_border_mode != ChunkBorderMode::Disabled {
+            self.update_chunk_border_vertices();
+        }
 
         let aspect_ratio = self.surface_config.width as f32 / self.surface_config.height as f32;
         let view_proj = self.camera.view_projection(aspect_ratio);
@@ -964,6 +1533,14 @@ impl WgpuState {
                 render_pass.set_vertex_buffer(0, face_buffer.slice(..));
                 render_pass.draw(0..6, 0..1);
             }
+
+            // Rendu des bordures de chunks (seulement si pas désactivé)
+            if self.chunk_border_mode != ChunkBorderMode::Disabled && self.chunk_border_vertex_count > 0 {
+                render_pass.set_pipeline(&self._chunk_border_pipeline);
+                render_pass.set_bind_group(0, &self.chunk_border_camera_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.chunk_border_vertex_buffer.slice(..));
+                render_pass.draw(0..self.chunk_border_vertex_count, 0..1);
+            }
         }
 
         // New render pass for egui
@@ -1012,6 +1589,13 @@ impl WgpuState {
     /// Get a mutable reference to the camera.
     pub fn camera_mut(&mut self) -> &mut Camera {
         &mut self.camera
+    }
+
+    /// Toggle l'affichage des bordures de chunks (F6)
+    /// Cycle entre: Disabled -> ChunkBorders -> FullGrid -> Disabled
+    pub fn toggle_chunk_borders(&mut self) {
+        self.chunk_border_mode = self.chunk_border_mode.next();
+        println!("[Debug] Chunk borders: {}", self.chunk_border_mode.as_str());
     }
 
     /// Obtenir une référence au monde des entités ECS

@@ -645,6 +645,13 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Toggle chunk borders (F6)
+                if self.input.state().just_pressed(GameAction::ToggleChunkBorders) {
+                    if let Some(state) = &mut self.wgpu_state {
+                        state.toggle_chunk_borders();
+                    }
+                }
+
                 // Cycle gamemode (G ou molette)
                 if self.input.state().just_pressed(GameAction::CycleGameMode) {
                     if let Some(state) = &mut self.wgpu_state {

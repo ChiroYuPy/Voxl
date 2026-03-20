@@ -1,0 +1,33 @@
+//! Forêt
+Biome(
+    id: "forest",
+    temperature: 0.6,
+    humidity: 0.7,
+    has_precipitation: true,
+
+    features: [
+        // Surface - beaucoup d'arbres
+        [
+            FeatureEntry(name: "oak_tree", chance: 0.2),
+            FeatureEntry(name: "birch_tree", chance: 0.1),
+            FeatureEntry(name: "grass", chance: 1.0),
+            FeatureEntry(name: "mushroom", chance: 0.05),
+        ],
+        // Sous-sol
+        [
+            FeatureEntry(name: "coal_ore", chance: 0.12),
+            FeatureEntry(name: "iron_ore", chance: 0.08),
+        ],
+        // Profond
+        [
+            FeatureEntry(name: "diamond_ore", chance: 0.01),
+        ],
+        [],
+    ],
+
+    surface: SurfaceRule(
+        top_material: "grass",
+        under_material: Some("dirt"),
+        depth: 4,
+    ),
+)

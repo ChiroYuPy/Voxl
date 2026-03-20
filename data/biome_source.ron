@@ -1,0 +1,37 @@
+//! Multi-Noise Biome Source pour le surmonde
+//!
+//! Définit quel biome est utilisé selon les paramètres climatiques
+
+MultiNoiseBiomeSource(
+    biomes: [
+        // Plaines - biome par défaut, couvre toute la gamme
+        BiomeEntry(
+            biome: "plains",
+            temperature: ParameterRange(min: -2.0, max: 2.0),
+            humidity: ParameterRange(min: -2.0, max: 2.0),
+            continentalness: ParameterRange(min: -2.0, max: 2.0),
+            erosion: ParameterRange(min: -2.0, max: 2.0),
+            weirdness: ParameterRange(min: -2.0, max: 2.0),
+        ),
+
+        // Désert - chaud et sec
+        BiomeEntry(
+            biome: "desert",
+            temperature: ParameterRange(min: 0.5, max: 2.0),
+            humidity: ParameterRange(min: -2.0, max: -0.3),
+            continentalness: ParameterRange(min: -2.0, max: 2.0),
+            erosion: ParameterRange(min: -2.0, max: 2.0),
+            weirdness: ParameterRange(min: -2.0, max: 2.0),
+        ),
+
+        // Forêt - tempéré et humide
+        BiomeEntry(
+            biome: "forest",
+            temperature: ParameterRange(min: 0.3, max: 0.8),
+            humidity: ParameterRange(min: 0.3, max: 2.0),
+            continentalness: ParameterRange(min: -2.0, max: 2.0),
+            erosion: ParameterRange(min: -2.0, max: 2.0),
+            weirdness: ParameterRange(min: -2.0, max: 2.0),
+        ),
+    ],
+)

@@ -30,6 +30,23 @@ impl DirtyChunkSet {
         result
     }
 
+    /// Retourne jusqu'à `max` chunks dirty, sans tous les retirer
+    /// Utile pour éviter les freezes en traitant par petits batches
+    pub fn take_dirty_limited(&mut self, max: usize) -> Vec<(i32, i32, i32)> {
+        let result: Vec<(i32, i32, i32)> = self.dirty
+            .iter()
+            .take(max)
+            .copied()
+            .collect();
+
+        // Retirer seulement ceux qu'on a pris
+        for pos in &result {
+            self.dirty.remove(pos);
+        }
+
+        result
+    }
+
     pub fn is_dirty(&self, chunk_x: i32, chunk_y: i32, chunk_z: i32) -> bool {
         self.dirty.contains(&(chunk_x, chunk_y, chunk_z))
     }

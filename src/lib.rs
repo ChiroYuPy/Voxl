@@ -6,5 +6,6 @@ pub mod raycast;
 pub mod renderer;
 pub mod terrain;
 pub mod voxel;
+pub mod worldgen;
 
 pub use app::run;

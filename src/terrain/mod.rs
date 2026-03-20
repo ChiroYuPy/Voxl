@@ -1,4 +1,5 @@
 use crate::voxel::{VoxelChunk, VoxelWorld, SharedVoxelRegistry, CHUNK_SIZE, WORLD_HEIGHT, VERTICAL_CHUNKS, GlobalVoxelId};
+use crate::worldgen::WorldGenerator;
 use noise::{Perlin, Fbm, NoiseFn, MultiFractal};
 
 /// IDs des blocs communs mis en cache pour éviter les lookup par string
@@ -18,6 +19,17 @@ struct BlockIds {
     emerald_ore: GlobalVoxelId,
 }
 
+/// Mode de génération du terrain
+#[derive(Debug, Clone, Copy)]
+pub enum TerrainGenMode {
+    /// Utilise le générateur legacy (hardcodé)
+    Legacy,
+    /// Utilise le générateur data-driven depuis un fichier RON
+    DataDriven(&'static str),
+    /// Utilise la config data-driven par défaut
+    DefaultData,
+}
+
 /// Générateur de terrain
 pub struct TerrainGenerator {
     terrain_noise: Fbm<Perlin>,
@@ -25,11 +37,39 @@ pub struct TerrainGenerator {
     ore_noise: Perlin,
     _seed: u32,
     block_ids: Option<BlockIds>,
+    /// Générateur data-driven (optionnel)
+    worldgen: Option<WorldGenerator>,
 }
 
 impl TerrainGenerator {
     pub fn new() -> Self {
+        Self::with_mode(TerrainGenMode::Legacy)
+    }
+
+    /// Crée un générateur avec un mode spécifique
+    pub fn with_mode(mode: TerrainGenMode) -> Self {
         let seed = 12345u32;
+        let worldgen = match mode {
+            TerrainGenMode::Legacy => None,
+            TerrainGenMode::DataDriven(path) => {
+                println!("[WorldGen] Loading config from: {}", path);
+                match WorldGenerator::load_from_file(path) {
+                    Ok(generator) => {
+                        println!("[WorldGen] Config loaded successfully");
+                        Some(generator)
+                    }
+                    Err(e) => {
+                        eprintln!("[WorldGen] Failed to load config: {}, using legacy", e);
+                        None
+                    }
+                }
+            }
+            TerrainGenMode::DefaultData => {
+                println!("[WorldGen] Using default data-driven config");
+                Some(WorldGenerator::default())
+            }
+        };
+
         Self {
             terrain_noise: Fbm::new(seed)
                 .set_octaves(4)
@@ -39,7 +79,13 @@ impl TerrainGenerator {
             ore_noise: Perlin::new(seed + 200),
             _seed: seed,
             block_ids: None,
+            worldgen,
         }
+    }
+
+    /// Indique si ce générateur utilise le système data-driven
+    pub fn is_data_driven(&self) -> bool {
+        self.worldgen.is_some()
     }
 
     /// Initialise les IDs de blocs depuis le registry (à appeler une fois au démarrage)
@@ -66,6 +112,11 @@ impl TerrainGenerator {
             diamond_ore: get_id("diamond_ore"),
             emerald_ore: get_id("emerald_ore"),
         });
+
+        // Initialiser aussi le worldgen data-driven
+        if let Some(ref mut worldgen) = self.worldgen {
+            worldgen.init_block_ids(registry);
+        }
     }
 
     fn terrain_height(&self, wx: f64, wz: f64) -> i32 {
@@ -194,18 +245,38 @@ impl TerrainGenerator {
     }
 
     pub fn generate_test_world(&self, world: &mut VoxelWorld) {
-        // Initialiser les IDs de blocs une seule fois
-        // Note: on a besoin d'un mutable self, donc on ne peut pas le faire directement
-        // On va utiliser une approche différente - on récupère les IDs une seule fois
         let registry = world.registry().clone();
 
-        // Créer une copie mutable temporaire pour l'initialisation
+        // Utiliser le générateur data-driven si disponible
+        if self.worldgen.is_some() {
+            println!("[WorldGen] Generating world with data-driven system...");
+            // Pour le moment on utilise un nouveau générateur avec la config par défaut
+            // car on ne peut pas cloner le worldgen (Arc<dyn NoiseGenerator> n'est pas Clone)
+            // Une solution propre serait d'avoir un generate_chunk qui prend registry
+            let mut wg_temp = WorldGenerator::default();
+            wg_temp.init_block_ids(&registry);
+
+            for cx in -3..=3 {
+                for cz in -3..=3 {
+                    for cy in 0..VERTICAL_CHUNKS as i32 {
+                        let chunk = world.get_or_create_chunk(cx, cy, cz);
+                        wg_temp.generate_chunk(chunk, cx, cy, cz);
+                        println!("[WorldGen] Generated chunk ({}, {}, {})", cx, cy, cz);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Sinon utiliser le générateur legacy
+        println!("[WorldGen] Generating world with legacy system...");
         let mut gen_temp = Self {
             terrain_noise: self.terrain_noise.clone(),
             cave_noise: self.cave_noise.clone(),
             ore_noise: self.ore_noise.clone(),
             _seed: self._seed,
             block_ids: None,
+            worldgen: None,
         };
         gen_temp.init_block_ids(&registry);
 

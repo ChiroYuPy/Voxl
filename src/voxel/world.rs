@@ -75,6 +75,11 @@ impl VoxelWorld {
         self.chunks.get_mut(&(cx, cy, cz))
     }
 
+    /// Insère un chunk complet directement (utile pour le chargement asynchrone)
+    pub fn insert_chunk(&mut self, cx: i32, cy: i32, cz: i32, chunk: VoxelChunk) {
+        self.chunks.insert((cx, cy, cz), chunk);
+    }
+
     pub fn set_voxel(&mut self, x: i32, y: i32, z: i32, global_id: Option<GlobalVoxelId>) -> SetResult {
         let cx = x.div_euclid(CHUNK_SIZE as i32);
         let cy = y.div_euclid(CHUNK_SIZE as i32);

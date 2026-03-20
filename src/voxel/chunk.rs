@@ -4,7 +4,7 @@ pub const CHUNK_SIZE: u32 = 16;
 pub const CHUNK_VOLUME: usize = CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize;
 
 /// Hauteur totale du monde en blocs (peut avoir plusieurs chunks verticaux)
-pub const WORLD_HEIGHT: u32 = 256;
+pub const WORLD_HEIGHT: u32 = 128;
 
 /// Nombre de chunks verticaux nécessaires pour WORLD_HEIGHT
 pub const VERTICAL_CHUNKS: u32 = (WORLD_HEIGHT + CHUNK_SIZE - 1) / CHUNK_SIZE;
@@ -101,6 +101,33 @@ impl VoxelChunk {
     #[inline(always)]
     pub fn set_unchecked(&mut self, x: u32, y: u32, z: u32, global_id: Option<GlobalVoxelId>) {
         self.set(x, y, z, global_id);
+    }
+
+    /// Réinitialise le chunk (tous les voxels deviennent air, palette réinitialisée)
+    pub fn clear(&mut self) {
+        self.voxels = Box::new([0; CHUNK_VOLUME]);
+        self.palette = vec![0];
+    }
+
+    /// Crée un chunk vide (équivalent à new() mais explicite)
+    pub fn empty() -> Self {
+        Self::new()
+    }
+
+    /// Extrait les données du chunk pour transfert inter-thread
+    pub fn extract_data(&self) -> (Box<[LocalVoxelId; CHUNK_VOLUME]>, Vec<GlobalVoxelId>) {
+        (
+            self.voxels.clone(),
+            self.palette.clone(),
+        )
+    }
+
+    /// Reconstruit un chunk depuis des données extraites
+    pub fn from_data(voxels: Box<[LocalVoxelId; CHUNK_VOLUME]>, palette: Vec<GlobalVoxelId>) -> Self {
+        Self {
+            voxels,
+            palette,
+        }
     }
 }
 

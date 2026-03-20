@@ -1,0 +1,35 @@
+//! Fonctions de densité de bruit nommées
+//! Ces fonctions sont référencées par le NoiseRouter
+
+{
+    // Bruit de température - détermine les zones chaudes/froides
+    "temperature_noise": Noise2D(
+        seed: 12345,
+        frequency: 0.005,
+    ),
+
+    // Bruit d'humidité
+    "humidity_noise": Noise2D(
+        seed: 12346,
+        frequency: 0.005,
+    ),
+
+    // Continentalness - définit les masses continentales
+    // > 0 = continent, < 0 = océan
+    "continentalness_noise": Noise2D(
+        seed: 12347,
+        frequency: 0.002,
+    ),
+
+    // Érosion - ajoute des détails de terrain
+    "erosion_noise": Noise2D(
+        seed: 12348,
+        frequency: 0.01,
+    ),
+
+    // Weirdness - variations inhabituelles
+    "weirdness_noise": Noise2D(
+        seed: 12349,
+        frequency: 0.015,
+    ),
+}

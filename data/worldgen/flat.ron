@@ -1,0 +1,69 @@
+//! Configuration de génération de monde plat (pour tests)
+
+//!
+//! Génère un monde relativement plat avec quelques collines
+
+WorldGenConfig(
+    seed: 99999,
+
+    height: 128,
+
+    sea_level: 50,
+
+    density_functions: {
+        // Terrain très simple
+        "terrain": Noise2D(
+            seed: 99999,
+            frequency: 0.01,
+        ),
+
+        // Gradient vertical
+        "gradient": YClampedGradient(
+            from_y: 0,
+            to_y: 100,
+            from_val: 1.0,
+            to_val: -1.0,
+        ),
+
+        // Densité finale - beaucoup de terrain plat
+        "final_density": Add(
+            arg1: Mul(
+                factor: 5.0,  // Peu de variation
+                arg: Reference("terrain"),
+            ),
+            arg2: Reference("gradient"),
+        ),
+    },
+
+    surface_layers: [
+        SurfaceLayer(
+            block: "grass",
+            depth: 1,
+        ),
+        SurfaceLayer(
+            block: "dirt",
+            depth: 2,
+        ),
+    ],
+
+    caves: CaveConfig(
+        enabled: false,  // Pas de cavernes pour tests
+        frequency: 0.05,
+        threshold: 0.4,
+        min_y: 15,
+        max_y: 60,
+    ),
+
+    ores: [
+        OreConfig(
+            block: "coal_ore",
+            min_y: 5,
+            max_y: 30,
+            threshold: 0.95,
+            noise_params: OreNoiseParams(
+                seed: 30001,
+                frequency: 0.05,
+            ),
+        ),
+    ],
+)
