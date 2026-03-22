@@ -169,7 +169,11 @@ impl ServerIntegration {
                     break;
                 }
                 Err(e) => {
-                    error!("[Server] Failed to receive packet: {}", e);
+                    // Non-blocking sockets return "unexpected end of file" when no data available
+                    // Only log actual errors, not expected would-block conditions
+                    if !e.contains("unexpected end of file") && !e.contains("would block") {
+                        error!("[Server] Failed to receive packet: {}", e);
+                    }
                     break;
                 }
             }

@@ -83,6 +83,9 @@ impl GameState {
                     }
                 }
 
+                // Give the server thread time to start listening before connecting
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
                 // Connect to embedded server (localhost)
                 let server_addr = format!("127.0.0.1:{}", port);
                 self.connect_to_server(&server_addr, username).await?;

@@ -84,6 +84,9 @@ impl EmbeddedServer {
         let mut client_stream: Option<TcpStream> = None;
         let mut client_connected = false;
 
+        // Send buffer to prevent partial writes from corrupting the stream
+        let mut send_buffer: Vec<u8> = Vec::new();
+
         // Track player position for chunk generation
         let mut player_pos: (i32, i32, i32) = (0, 80, 0);
         let mut chunks_sent = std::collections::HashSet::new();
@@ -103,9 +106,9 @@ impl EmbeddedServer {
                         client_stream = Some(stream);
                         client_connected = true;
 
-                        // Send handshake/motd
+                        // Send handshake/motd (direct send for handshake)
                         if let Some(ref mut stream) = client_stream {
-                            Self::send_packet(stream, Packet {
+                            Self::send_packet_direct(stream, Packet {
                                 header: voxl_common::network::PacketHeader {
                                     magic: PACKET_MAGIC,
                                     version: PROTOCOL_VERSION,
@@ -131,6 +134,9 @@ impl EmbeddedServer {
             // Handle existing client
             if client_connected {
                 if let Some(mut stream) = client_stream.take() {
+                    // First, try to flush any pending send data
+                    let buffer_empty = Self::flush_send_buffer(&mut stream, &mut send_buffer).unwrap_or(true);
+
                     // Receive packets from client
                     let mut should_disconnect = false;
                     match Self::receive_packet(&mut stream) {
@@ -155,7 +161,7 @@ impl EmbeddedServer {
                                         }
                                     };
 
-                                    // Send block change back to client (confirmation)
+                                    // Send block change back to client (confirmation) - queue it
                                     let block_id = if let Ok(world) = world.read() {
                                         world.get_voxel_opt(action.x, action.y, action.z)
                                     } else {
@@ -163,7 +169,7 @@ impl EmbeddedServer {
                                     };
 
                                     if let Some(id) = block_id {
-                                        Self::send_packet(&mut stream, Packet {
+                                        let _ = Self::queue_packet(&mut send_buffer, Packet {
                                             header: voxl_common::network::PacketHeader {
                                                 magic: PACKET_MAGIC,
                                                 version: PROTOCOL_VERSION,
@@ -175,7 +181,7 @@ impl EmbeddedServer {
                                                 z: action.z,
                                                 block_id: id,
                                             }),
-                                        }).ok();
+                                        });
                                     }
                                 }
                                 _ => {}
@@ -197,7 +203,7 @@ impl EmbeddedServer {
                     // Generate and send chunks around player
                     let now = Instant::now();
                     let chunks_before = chunks_sent.len();  // Track before entering the if block
-                    if now.duration_since(last_chunk_gen) >= CHUNK_GEN_INTERVAL && !should_disconnect {
+                    if now.duration_since(last_chunk_gen) >= CHUNK_GEN_INTERVAL && !should_disconnect && buffer_empty {
                         last_chunk_gen = now;
 
                         // Generate chunks in a radius around player (including vertical)
@@ -210,11 +216,11 @@ impl EmbeddedServer {
                         debug!("[EmbeddedServer] Generating chunks around player chunk ({}, {}, {}) - view_distance={}, vertical={}",
                               px, py, pz, view_distance, vertical_range);
 
-                        let mut send_buffer_full = false;
-                        'outer: for dx in -view_distance..=view_distance {
-                            if send_buffer_full { break; }
+                        let mut chunks_queued = 0usize;
+                        const MAX_CHUNKS_PER_FRAME: usize = 50;  // Limit chunks queued per frame
+                        for dx in -view_distance..=view_distance {
+                            if chunks_queued >= MAX_CHUNKS_PER_FRAME { break; }
                             for dz in -view_distance..=view_distance {
-                                if send_buffer_full { break; }
                                 let cx = px + dx;
                                 let cz = pz + dz;
 
@@ -234,9 +240,9 @@ impl EmbeddedServer {
                                     // Generate chunk
                                     let chunk_data = Self::generate_chunk_data(&world, &worldgen, &registry, cx, cy, cz);
                                     if let Ok(data) = chunk_data {
-                                        debug!("[EmbeddedServer] Sending chunk ({},{},{})", cx, cy, cz);
-                                        // Send chunk to client
-                                        let send_result = Self::send_packet(&mut stream, Packet {
+                                        debug!("[EmbeddedServer] Queueing chunk ({},{},{})", cx, cy, cz);
+                                        // Queue chunk for sending
+                                        let queue_result = Self::queue_packet(&mut send_buffer, Packet {
                                             header: voxl_common::network::PacketHeader {
                                                 magic: PACKET_MAGIC,
                                                 version: PROTOCOL_VERSION,
@@ -250,41 +256,20 @@ impl EmbeddedServer {
                                             }),
                                         });
 
-                                        match send_result {
-                                            Ok(_) => {
-                                                // Chunk sent successfully
-                                                chunks_sent.insert((cx, cy, cz));
-                                            }
-                                            Err(e) => {
-                                                // Send failed (buffer full or error)
-                                                if e.contains("WouldBlock") {
-                                                    // Send buffer full, stop sending this frame
-                                                    debug!("[EmbeddedServer] Send buffer full, pausing chunk sends");
-                                                    send_buffer_full = true;
-                                                    break 'outer;
-                                                } else {
-                                                    // Other error, log but continue
-                                                    debug!("[EmbeddedServer] Failed to send chunk ({},{},{}): {}", cx, cy, cz, e);
-                                                }
-                                            }
+                                        if queue_result.is_ok() {
+                                            // Chunk queued successfully - mark as sent
+                                            chunks_sent.insert((cx, cy, cz));
+                                            chunks_queued += 1;
                                         }
-                                    } else {
-                                        // Chunk not sent (generation failed)
-                                        debug!("[EmbeddedServer] Skipping chunk ({},{},{}) - generation failed", cx, cy, cz);
                                     }
+                                }
+                            }
+                        }
 
-                                    // Limit chunks per frame
-                                    if chunks_sent.len() % 50 == 0 {
-                                        break;
-                                    }
-                                }  // End for dy
-                            }  // End for dz
-                        }  // End for dx
-                    }
-
-                    let chunks_after = chunks_sent.len();
-                    if chunks_after > chunks_before {
-                        debug!("[EmbeddedServer] Sent {} chunks this frame (total: {})", chunks_after - chunks_before, chunks_after);
+                        let chunks_after = chunks_sent.len();
+                        if chunks_after > chunks_before {
+                            debug!("[EmbeddedServer] Sent {} chunks this frame (total: {})", chunks_after - chunks_before, chunks_after);
+                        }
                     }
 
                     // Put stream back or clear if disconnected
@@ -353,8 +338,50 @@ impl EmbeddedServer {
         }
     }
 
-    /// Send a packet to the client (non-blocking)
-    fn send_packet(stream: &mut TcpStream, packet: Packet) -> Result<(), String> {
+    /// Add a packet to the send buffer (doesn't write to stream yet)
+    fn queue_packet(send_buffer: &mut Vec<u8>, packet: Packet) -> Result<(), String> {
+        let bytes = packet.to_bytes().map_err(|e| format!("{:?}", e))?;
+        let len = bytes.len() as u32;
+
+        // Add length prefix then data
+        send_buffer.extend_from_slice(&len.to_be_bytes());
+        send_buffer.extend_from_slice(&bytes);
+
+        Ok(())
+    }
+
+    /// Flush the send buffer to the stream (non-blocking)
+    /// Returns true if buffer is now empty, false if more data remains
+    fn flush_send_buffer(stream: &mut TcpStream, send_buffer: &mut Vec<u8>) -> Result<bool, Box<dyn std::error::Error>> {
+        if send_buffer.is_empty() {
+            return Ok(true);
+        }
+
+        match stream.write(&send_buffer) {
+            Ok(n) => {
+                if n == send_buffer.len() {
+                    // All data written
+                    send_buffer.clear();
+                    let _ = stream.flush();
+                    Ok(true)
+                } else if n > 0 {
+                    // Partial write - remove written portion
+                    send_buffer.drain(0..n);
+                    Ok(false) // Buffer not empty
+                } else {
+                    Err("Write returned 0".into())
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                Ok(false) // Buffer not empty, try again later
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Send a packet directly to the client (legacy, use queue_packet + flush instead)
+    #[allow(dead_code)]
+    fn send_packet_direct(stream: &mut TcpStream, packet: Packet) -> Result<(), String> {
         let bytes = packet.to_bytes().map_err(|e| format!("{:?}", e))?;
         let len = bytes.len() as u32;
 

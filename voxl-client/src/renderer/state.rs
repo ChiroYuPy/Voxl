@@ -267,10 +267,12 @@ impl WgpuState {
             .unwrap_or(surface_caps.formats[0]);
 
         // Choisir le present_mode selon le VSync
+        // Use Mailbox for non-vsync as it's widely supported (including Wayland)
+        // Immediate is not available on some platforms (like Wayland)
         let present_mode = if config.graphics.vsync {
             wgpu::PresentMode::Fifo  // VSync actif
         } else {
-            wgpu::PresentMode::Immediate  // VSync inactif
+            wgpu::PresentMode::Mailbox  // Low latency, widely supported
         };
 
         let surface_config = wgpu::SurfaceConfiguration {
@@ -1878,10 +1880,12 @@ impl WgpuState {
 
         // Reconfigure surface if vsync changed
         if needs_reconfigure {
+            // Use Mailbox for non-vsync as it's widely supported (including Wayland)
+            // Immediate is not available on some platforms (like Wayland)
             let present_mode = if self.config.graphics.vsync {
                 wgpu::PresentMode::Fifo
             } else {
-                wgpu::PresentMode::Immediate
+                wgpu::PresentMode::Mailbox
             };
             self.surface_config.present_mode = present_mode;
             self._surface.configure(&self.device, &self.surface_config);
