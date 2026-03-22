@@ -1,1 +1,38 @@
-/target
+# Cargo
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.claude/
+
+# Fichiers générés et données
+/data/
+/data/**
+!/data/.gitkeep
+
+# Logs
+*.log
+
+# Config utilisateur (contient des préférences locales)
+assets/config/user_config.toml
+
+# Debug files
+atlas_debug.png
+*.ppm
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib

@@ -1,0 +1,45 @@
+[package]
+name = "voxl-client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Common code
+voxl-common = { path = "../voxl-common" }
+
+# Graphics
+wgpu.workspace = true
+winit.workspace = true
+glam.workspace = true
+
+# ECS
+hecs.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+env_logger.workspace = true
+
+# Utilities
+pollster.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+
+# Config file parsing
+serde.workspace = true
+ron.workspace = true
+toml.workspace = true
+
+# Multithreading
+rayon.workspace = true
+crossbeam-channel.workspace = true
+
+# Networking
+tokio = { version = "1.44", features = ["full"] }
+
+# UI
+egui.workspace = true
+egui-wgpu.workspace = true
+
+# Noise pour la génération de terrain
+noise.workspace = true

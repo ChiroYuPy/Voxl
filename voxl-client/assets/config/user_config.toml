@@ -1,0 +1,42 @@
+[graphics]
+render_distance = 8
+ao_intensity = 0.699999988079071
+vsync = true
+max_fps = 144
+
+[keybindings.bindings]
+LookUp = ["MouseMoveY"]
+PlaceBlock = ["Mouse3"]
+PickBlock = ["Mouse2"]
+ToggleMouseCapture = ["NamedEnter"]
+BreakBlock = ["Mouse1"]
+DecreaseSpeed = ["Key-"]
+MoveUp = ["NamedSpace"]
+MoveDown = ["NamedShift"]
+OpenChat = ["KeyT"]
+ToggleDebugUI = ["NamedF3"]
+NextBlockType = ["Mouse4"]
+MoveForward = [
+    "KeyZ",
+    "KeyW",
+]
+IncreaseSpeed = ["NamedControl"]
+ToggleChunkBorders = ["NamedF6"]
+CycleGameMode = ["KeyG"]
+MoveLeft = [
+    "KeyQ",
+    "KeyA",
+]
+MoveRight = ["KeyD"]
+LookRight = ["MouseMoveX"]
+ToggleFly = ["KeyF"]
+LookDown = ["MouseMoveY"]
+MoveBackward = ["KeyS"]
+LookLeft = ["MouseMoveX"]
+PreviousBlockType = ["Mouse5"]
+ReleaseMouse = ["NamedEscape"]
+
+[server]
+mode = "embedded"
+address = "127.0.0.1"
+port = 25565

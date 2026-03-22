@@ -1,0 +1,25 @@
+[package]
+name = "voxl-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "voxl-server"
+path = "src/main.rs"
+
+[dependencies]
+voxl-common = { path = "../voxl-common" }
+
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+env_logger = "0.11.9"
+
+# Math
+glam = "0.32.1"
+
+# ECS
+hecs = "0.11"
+
+# Networking
+tokio = { version = "1.44", features = ["full"] }
