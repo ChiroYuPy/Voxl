@@ -181,6 +181,7 @@ pub struct WgpuState {
     // Monde voxel et meshs dynamiques
     world: Arc<RwLock<VoxelWorld>>,
     chunk_meshes: HashMap<ChunkPos, ChunkMesh>,
+    visible_chunks: Vec<ChunkPos>,  // Chunks visibles ce frame (frustum culling)
 
     // NOUVEAU: Chunk tracking avec dirty system
     chunk_tracker: SharedChunkTracker,
@@ -655,6 +656,7 @@ impl WgpuState {
 
         // Pas de meshs initiaux - ils seront générés progressivement
         let chunk_meshes = HashMap::new();
+        let visible_chunks = Vec::new();
 
         // Initialize egui renderer
         let egui_renderer = egui_wgpu::Renderer::new(&device, surface_config.format, None, 1);
@@ -692,6 +694,7 @@ impl WgpuState {
             device,
             world: world_arc,
             chunk_meshes,
+            visible_chunks,
             chunk_tracker,
             chunk_gen_queue: None,  // DISABLED: Server-only chunk generation
             mesh_queue: Some(mesh_queue),
@@ -1486,6 +1489,23 @@ impl WgpuState {
         }
     }
 
+    /// Met à jour la liste des chunks visibles avec frustum culling
+    fn update_visible_chunks(&mut self, aspect_ratio: f32) {
+        use crate::renderer::frustum::Frustum;
+
+        let view_proj = self.camera.view_projection(aspect_ratio);
+        let frustum = Frustum::from_view_proj(view_proj);
+
+        self.visible_chunks.clear();
+        self.visible_chunks.reserve(self.chunk_meshes.len());
+
+        for (&pos, _) in &self.chunk_meshes {
+            if frustum.is_chunk_visible(pos.0, pos.1, pos.2) {
+                self.visible_chunks.push(pos);
+            }
+        }
+    }
+
     pub fn render(&mut self, selected_block: (u32, String)) -> Result<(), wgpu::SurfaceError> {
         let render_start = std::time::Instant::now();
         self.egui_state.update_fps();
@@ -1505,6 +1525,10 @@ impl WgpuState {
         }
 
         let aspect_ratio = self.surface_config.width as f32 / self.surface_config.height as f32;
+
+        // Frustum culling : mettre à jour les chunks visibles
+        self.update_visible_chunks(aspect_ratio);
+
         let view_proj = self.camera.view_projection(aspect_ratio);
         let view_proj_array: [[f32; 4]; 4] = view_proj.to_cols_array_2d();
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[view_proj_array]));
@@ -1556,6 +1580,8 @@ impl WgpuState {
             selected_block,
             block_count,
             perf_snapshot,
+            self.visible_chunks.len(),
+            self.chunk_meshes.len(),
         );
 
         // Show chat UI and get submitted command
@@ -1623,9 +1649,12 @@ impl WgpuState {
             render_pass.set_pipeline(&self._voxel_pipeline);
             render_pass.set_bind_group(0, &self.atlas_bind_group, &[]);
 
-            for (_chunk_pos, mesh) in &self.chunk_meshes {
-                render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                render_pass.draw(0..mesh.vertex_count, 0..1);
+            // Rendu des chunks visibles (frustum culling)
+            for chunk_pos in &self.visible_chunks {
+                if let Some(mesh) = self.chunk_meshes.get(chunk_pos) {
+                    render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    render_pass.draw(0..mesh.vertex_count, 0..1);
+                }
             }
 
             if let Some(ref face_buffer) = self.highlight_face_buffer {

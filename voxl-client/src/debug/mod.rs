@@ -125,6 +125,8 @@ impl EguiState {
         selected_block: (u32, String),
         block_count: usize,
         perf_snapshot: PerformanceSnapshot,
+        visible_chunks: usize,
+        total_chunks: usize,
     ) {
         if !self.enabled {
             return;
@@ -201,6 +203,10 @@ impl EguiState {
 
                         // Memory section
                         ui.strong("Memory:");
+                        ui.end_row();
+
+                        ui.label("Visible Chunks:");
+                        ui.label(format!("{}/{}", visible_chunks, total_chunks));
                         ui.end_row();
 
                         ui.label("Chunks:");

@@ -1,5 +1,6 @@
 pub mod atlas;
 pub mod chunk_tracker;
+pub mod frustum;
 pub mod pipeline;
 pub mod queue_system;
 pub mod state;
