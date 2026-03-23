@@ -42,7 +42,7 @@ impl Default for App {
         Self {
             window: None,
             wgpu_state: None,
-            input: InputManager::with_bindings(KeyBindings::from_config(&config.keybindings)),
+            input: InputManager::with_bindings(KeyBindings::from_config_or_default(&config.keybindings)),
             config,
             is_closing: false,
             modifiers: Modifiers::default(),

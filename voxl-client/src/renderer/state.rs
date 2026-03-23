@@ -1,8 +1,9 @@
-use voxl_common::voxel::{VoxelWorld, ChunkPos, GlobalVoxelId, SharedVoxelRegistry, TextureUV, VoxelFace, CHUNK_SIZE, VoxelChunk, chunk::VERTICAL_CHUNKS};
+use voxl_common::voxel::{VoxelWorld, ChunkPos, GlobalVoxelId, SharedVoxelRegistry, TextureUV, VoxelFace, CHUNK_SIZE, VoxelChunk, chunk::VERTICAL_CHUNKS, InsertResult};
 use crate::chunk_tracker_compat::SharedChunkTracker;
 use crate::renderer::queue_system::{ChunkGenerationQueue, MeshQueue, MeshPriority};
 use crate::renderer::pipeline::ChunkBorderVertex;
 use crate::renderer::VoxelVertex;
+use crate::renderer::ui::{UIVertex, create_ui_pipeline, create_screen_uniform_buffer, create_crosshair_texture, upload_crosshair_texture};
 use crate::worldgen::WorldGenerator;
 use crate::debug::EguiState;
 use voxl_common::entities::{EntityWorld, GameMode};
@@ -11,7 +12,7 @@ use crate::performance::PerformanceCollector;
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn, error, debug};
 use winit::window::Window;
-use glam::{Mat4, Vec3A};
+use glam::{Mat4, Vec3A, Vec2};
 use wgpu::util::DeviceExt;
 use std::sync::{Arc, RwLock};
 
@@ -227,6 +228,16 @@ pub struct WgpuState {
 
     // Performance tracking
     performance_collector: PerformanceCollector,
+
+    // UI Rendering (crosshair, hotbar, etc.)
+    _ui_pipeline: wgpu::RenderPipeline,
+    ui_sampler: wgpu::Sampler,
+    crosshair_texture: wgpu::Texture,
+    crosshair_bind_group: wgpu::BindGroup,
+    ui_screen_buffer: wgpu::Buffer,
+    ui_screen_bind_group: wgpu::BindGroup,
+    crosshair_vertex_buffer: wgpu::Buffer,
+    screen_size: (u32, u32),
 }
 
 impl WgpuState {
@@ -661,6 +672,127 @@ impl WgpuState {
         // Initialize egui renderer
         let egui_renderer = egui_wgpu::Renderer::new(&device, surface_config.format, None, 1);
 
+        // === UI Rendering Setup ===
+        // Create UI pipeline
+        let ui_pipeline = create_ui_pipeline(&device, &surface_config);
+
+        // Create UI sampler (filtering, clamp to edge)
+        let ui_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("UI Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Create crosshair texture
+        let crosshair_texture = create_crosshair_texture(&device);
+        upload_crosshair_texture(&device, &queue, &crosshair_texture);
+
+        // Create crosshair texture view
+        let crosshair_view = crosshair_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create UI screen uniform buffer
+        let ui_screen_buffer = create_screen_uniform_buffer(&device);
+
+        // Update screen size buffer
+        let screen_size = [size.width as f32, size.height as f32];
+        queue.write_buffer(&ui_screen_buffer, 0, bytemuck::cast_slice(&screen_size));
+
+        // Create UI bind group layout
+        let ui_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("UI Bind Group Layout"),
+            entries: &[
+                // 0: Screen size uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // 1: Texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                // 2: Sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // Create UI bind group
+        let crosshair_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Crosshair Bind Group"),
+            layout: &ui_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ui_screen_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&crosshair_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&ui_sampler),
+                },
+            ],
+        });
+
+        // Create UI screen bind group (without texture, for solid color quads)
+        let ui_screen_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("UI Screen Bind Group (no texture)"),
+            layout: &ui_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ui_screen_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&crosshair_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&ui_sampler),
+                },
+            ],
+        });
+
+        // Create crosshair vertex buffer (centered 16x16 quad)
+        let crosshair_vertices: [UIVertex; 4] = UIVertex::quad(
+            (size.width as f32 - 16.0) / 2.0,  // Center X
+            (size.height as f32 - 16.0) / 2.0, // Center Y
+            16.0,  // Width
+            16.0,  // Height
+            [1.0, 1.0, 1.0, 1.0],  // White tint
+        );
+        let crosshair_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Crosshair Vertex Buffer"),
+            contents: bytemuck::cast_slice(&crosshair_vertices),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let screen_size = (size.width, size.height);
+
         // Créer le monde des entités ECS
         let mut entity_world = EntityWorld::new();
         // Spawner le joueur à une position proche du niveau du terrain (Y≈70)
@@ -715,6 +847,14 @@ impl WgpuState {
             egui_events: Vec::new(),
             egui_mouse_position: (0.0, 0.0),
             performance_collector: PerformanceCollector::new(),
+            _ui_pipeline: ui_pipeline,
+            ui_sampler,
+            crosshair_texture,
+            crosshair_bind_group,
+            ui_screen_buffer,
+            ui_screen_bind_group,
+            crosshair_vertex_buffer,
+            screen_size,
         }
     }
 
@@ -1245,15 +1385,31 @@ impl WgpuState {
 
             // Insérer le chunk dans le monde
             let chunk = VoxelChunk::from_data(voxels, palette);
-            if let Ok(mut world) = self.world.write() {
-                world.insert_chunk(result.cx, result.cy, result.cz, chunk);
-            }
+            let insert_result = if let Ok(mut world) = self.world.write() {
+                Some(world.insert_chunk(result.cx, result.cy, result.cz, chunk))
+            } else {
+                None
+            };
 
             // Marquer comme généré
             self.chunk_tracker.read().unwrap().mark_generated(pos);
 
             // Demander le mesh pour le chunk et ses voisins
-            self.request_mesh_for_chunk_and_neighbors(result.cx, result.cy, result.cz);
+            // Utiliser InsertResult pour connaître les voisins existants
+            if let Some(insert_result) = insert_result {
+                // Ajouter le chunk lui-même
+                self.pending_mesh_requests.insert((result.cx, result.cy, result.cz));
+
+                // IMPORTANT: Forcer le remesh des voisins existants avec haute priorité
+                // car leurs faces de bord peuvent changer (un chunk voisin est apparu)
+                for (nx, ny, nz) in insert_result.existing_neighbors {
+                    // Utiliser MeshPriority::Modified pour forcer le remesh complet
+                    self.request_mesh_single(nx, ny, nz, MeshPriority::Modified);
+                }
+            } else {
+                // Fallback: utiliser l'ancienne méthode
+                self.request_mesh_for_chunk_and_neighbors(result.cx, result.cy, result.cz);
+            }
         }
     }
 
@@ -1468,6 +1624,21 @@ impl WgpuState {
 
             // Update egui pixels_per_point
             self.egui_state.update_pixels_per_point(1.0);
+
+            // Update screen size buffer for UI
+            self.screen_size = (new_size.width, new_size.height);
+            let screen_size = [new_size.width as f32, new_size.height as f32];
+            self.queue.write_buffer(&self.ui_screen_buffer, 0, bytemuck::cast_slice(&screen_size));
+
+            // Update crosshair vertex buffer to recenter
+            let crosshair_vertices: [UIVertex; 4] = UIVertex::quad(
+                (new_size.width as f32 - 16.0) / 2.0,
+                (new_size.height as f32 - 16.0) / 2.0,
+                16.0,
+                16.0,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+            self.queue.write_buffer(&self.crosshair_vertex_buffer, 0, bytemuck::cast_slice(&crosshair_vertices));
 
             // Recréer le depth buffer avec les nouvelles dimensions
             self.depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -1698,6 +1869,29 @@ impl WgpuState {
                 render_pass.set_vertex_buffer(0, self.chunk_border_vertex_buffer.slice(..));
                 render_pass.draw(0..self.chunk_border_vertex_count, 0..1);
             }
+        }
+
+        // Render pass for crosshair (no depth, loads existing framebuffer)
+        {
+            let mut ui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("UI Crosshair Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&self._ui_pipeline);
+            ui_pass.set_bind_group(0, &self.crosshair_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, self.crosshair_vertex_buffer.slice(..));
+            ui_pass.draw(0..4, 0..1);  // 4 vertices for a quad
         }
 
         // New render pass for egui

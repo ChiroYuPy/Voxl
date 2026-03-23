@@ -39,6 +39,13 @@ pub struct SetResult {
     pub neighbor_chunks: Vec<ChunkPos>,
 }
 
+/// Résultat de l'insertion d'un chunk
+#[derive(Clone, Debug)]
+pub struct InsertResult {
+    pub chunk_pos: ChunkPos,
+    pub existing_neighbors: Vec<ChunkPos>,  // Voisins qui existaient déjà (besoin de remesh)
+}
+
 pub struct VoxelWorld {
     chunks: HashMap<ChunkPos, VoxelChunk>,
     registry: SharedVoxelRegistry,
@@ -76,8 +83,29 @@ impl VoxelWorld {
     }
 
     /// Insère un chunk complet directement (utile pour le chargement asynchrone)
-    pub fn insert_chunk(&mut self, cx: i32, cy: i32, cz: i32, chunk: VoxelChunk) {
+    /// Retourne les voisins qui existaient déjà (pour remesh)
+    pub fn insert_chunk(&mut self, cx: i32, cy: i32, cz: i32, chunk: VoxelChunk) -> InsertResult {
+        // Vérifier quels voisins existent déjà avant l'insertion
+        let potential_neighbors = [
+            (cx + 1, cy, cz), (cx - 1, cy, cz),
+            (cx, cy + 1, cz), (cx, cy - 1, cz),
+            (cx, cy, cz + 1), (cx, cy, cz - 1),
+        ];
+
+        let existing_neighbors: Vec<ChunkPos> = potential_neighbors.iter()
+            .filter(|(nx, ny, nz)| {
+                *ny >= 0 && self.chunks.contains_key(&(*nx, *ny, *nz))
+            })
+            .copied()
+            .collect();
+
+        // Insérer le chunk
         self.chunks.insert((cx, cy, cz), chunk);
+
+        InsertResult {
+            chunk_pos: (cx, cy, cz),
+            existing_neighbors,
+        }
     }
 
     pub fn set_voxel(&mut self, x: i32, y: i32, z: i32, global_id: Option<GlobalVoxelId>) -> SetResult {
@@ -112,6 +140,12 @@ impl VoxelWorld {
         }
         if lx == CHUNK_SIZE as u32 - 1 {
             neighbor_chunks.push((cx + 1, cy, cz));
+        }
+        if ly == 0 && cy > 0 {
+            neighbor_chunks.push((cx, cy - 1, cz));  // Chunk en-dessous
+        }
+        if ly == CHUNK_SIZE as u32 - 1 {
+            neighbor_chunks.push((cx, cy + 1, cz));  // Chunk au-dessus
         }
         if lz == 0 {
             neighbor_chunks.push((cx, cy, cz - 1));

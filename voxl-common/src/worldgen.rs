@@ -40,27 +40,39 @@ impl WorldGenerator {
     }
 
     /// Calculates terrain height at a given world position
-    /// Uses a smooth continuous heightmap based on sin/cos functions
+    /// Uses terraced elevation levels with moderate height variation
     #[inline]
     pub fn terrain_height(&self, wx: i32, wz: i32) -> i32 {
-        // Base height
-        let base = 50;
+        // Base height (lower than before for more accessible terrain)
+        let base = 48.0;
 
-        // Use sin/cos with global coordinates for a smooth, continuous heightmap
-        // Scale factors: large rolling hills
-        let scale_x = wx as f32 * 0.05;
-        let scale_z = wz as f32 * 0.05;
+        // Large rolling hills - reduced amplitude for lower mountains
+        let scale_x = wx as f32 * 0.03;
+        let scale_z = wz as f32 * 0.03;
+        let large_hills = (scale_x.sin() * 3.5 + scale_z.cos() * 3.5);
 
-        // Simple smooth height variation using sin/cos
-        let height_variation = (scale_x.sin() * 5.0 + scale_z.cos() * 5.0) as i32;
+        // Medium frequency terrain features
+        let med_scale_x = wx as f32 * 0.08;
+        let med_scale_z = wz as f32 * 0.08;
+        let med_hills = (med_scale_x.sin() * 2.0 + med_scale_z.cos() * 2.0);
 
-        // Add smaller detail variations
-        let detail_scale_x = wx as f32 * 0.15;
-        let detail_scale_z = wz as f32 * 0.15;
-        let detail_variation = (detail_scale_x.sin() * 2.0 + detail_scale_z.cos() * 2.0) as i32;
+        // Small detail noise
+        let detail_scale_x = wx as f32 * 0.2;
+        let detail_scale_z = wz as f32 * 0.2;
+        let detail = (detail_scale_x.sin() * 0.8 + detail_scale_z.cos() * 0.8);
 
-        // Clamp height to reasonable range [30, 70]
-        (base + height_variation + detail_variation).clamp(30, 70)
+        // Combine all variations
+        let raw_height = base + large_hills + med_hills + detail;
+
+        // Create terraces/levels by quantizing to 2-block steps
+        // This gives a more "layered" Minecraft-like appearance
+        let terraced = (raw_height / 2.0).floor() * 2.0;
+
+        // Add subtle smoothing between terraces (optional)
+        let smoothed = terraced + (raw_height % 2.0) * 0.3;
+
+        // Clamp to reasonable range [38, 62] - lower than before
+        smoothed.clamp(38.0, 62.0) as i32
     }
 
     /// Generates a complete chunk with detailed logging

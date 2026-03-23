@@ -50,7 +50,12 @@ impl ChunkTracker {
         let total_loaded = states.len();
         drop(states);
 
-        debug!("[ChunkTracker] Loaded chunk {:?} (total: {} chunks)", pos, total_loaded);
+        // Extra debug for y=0 chunks
+        if pos.1 == 0 {
+            info!("[ChunkTracker] LOADED Y=0 CHUNK {:?} (total: {} chunks)", pos, total_loaded);
+        } else {
+            debug!("[ChunkTracker] Loaded chunk {:?} (total: {} chunks)", pos, total_loaded);
+        }
 
         // Mark for meshing
         self.dirty.mark_dirty(pos);

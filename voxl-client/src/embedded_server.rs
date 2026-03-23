@@ -206,7 +206,7 @@ impl EmbeddedServer {
                     if now.duration_since(last_chunk_gen) >= CHUNK_GEN_INTERVAL && !should_disconnect && buffer_empty {
                         last_chunk_gen = now;
 
-                        // Generate chunks in a radius around player (including vertical)
+                        // Generate chunks in spiral pattern from center outward
                         let view_distance = 8;  // Horizontal radius
                         let vertical_range = 4;  // Vertical chunks to generate
                         let px = player_pos.0 >> 4;
@@ -216,37 +216,54 @@ impl EmbeddedServer {
                         debug!("[EmbeddedServer] Generating chunks around player chunk ({}, {}, {}) - view_distance={}, vertical={}",
                               px, py, pz, view_distance, vertical_range);
 
-                        let mut chunks_queued = 0usize;
-                        const MAX_CHUNKS_PER_FRAME: usize = 50;  // Limit chunks queued per frame
-                        for dx in -view_distance..=view_distance {
-                            if chunks_queued >= MAX_CHUNKS_PER_FRAME { break; }
-                            for dz in -view_distance..=view_distance {
-                                let cx = px + dx;
-                                let cz = pz + dz;
-
-                                // Generate vertical range of chunks
-                                for dy in -vertical_range..=vertical_range {
-                                    let cy = py + dy;
-
-                                    // Skip if above world height or too deep
-                                    if cy < 0 || cy * 16 >= WORLD_HEIGHT as i32 {
+                        // Generate chunk positions in spiral order (center first, then outward)
+                        let mut chunks_to_generate: Vec<(i32, i32, i32, i32)> = Vec::new();
+                        for radius in 0i32..=view_distance {
+                            for dx in -radius..=radius {
+                                for dz in -radius..=radius {
+                                    // Only add chunks at the current radius layer (outer edge)
+                                    // This creates concentric squares instead of revisiting inner chunks
+                                    if dx.abs() != radius && dz.abs() != radius {
                                         continue;
                                     }
+                                    let dist_sq = dx * dx + dz * dz;
+                                    chunks_to_generate.push((px + dx, pz + dz, dist_sq, radius));
+                                }
+                            }
+                        }
 
-                                    if chunks_sent.contains(&(cx, cy, cz)) {
-                                        continue; // Already sent
-                                    }
+                        // Sort by distance (center first)
+                        chunks_to_generate.sort_by_key(|&(_, _, dist_sq, _)| dist_sq);
 
-                                    // Generate chunk
-                                    let chunk_data = Self::generate_chunk_data(&world, &worldgen, &registry, cx, cy, cz);
-                                    if let Ok(data) = chunk_data {
-                                        debug!("[EmbeddedServer] Queueing chunk ({},{},{})", cx, cy, cz);
-                                        // Queue chunk for sending
-                                        let queue_result = Self::queue_packet(&mut send_buffer, Packet {
-                                            header: voxl_common::network::PacketHeader {
-                                                magic: PACKET_MAGIC,
-                                                version: PROTOCOL_VERSION,
-                                                packet_type: PacketType::ChunkData as u8,
+                        let mut chunks_queued = 0usize;
+                        const MAX_CHUNKS_PER_FRAME: usize = 50;
+
+                        for (cx, cz, _dist_sq, _radius) in chunks_to_generate {
+                            if chunks_queued >= MAX_CHUNKS_PER_FRAME { break; }
+
+                            // Generate vertical range of chunks
+                            for dy in -vertical_range..=vertical_range {
+                                let cy = py + dy;
+
+                                // Skip if above world height or too deep
+                                if cy < 0 || cy * 16 >= WORLD_HEIGHT as i32 {
+                                    continue;
+                                }
+
+                                if chunks_sent.contains(&(cx, cy, cz)) {
+                                    continue; // Already sent
+                                }
+
+                                // Generate chunk
+                                let chunk_data = Self::generate_chunk_data(&world, &worldgen, &registry, cx, cy, cz);
+                                if let Ok(data) = chunk_data {
+                                    debug!("[EmbeddedServer] Queueing chunk ({},{},{})", cx, cy, cz);
+                                    // Queue chunk for sending
+                                    let queue_result = Self::queue_packet(&mut send_buffer, Packet {
+                                        header: voxl_common::network::PacketHeader {
+                                            magic: PACKET_MAGIC,
+                                            version: PROTOCOL_VERSION,
+                                            packet_type: PacketType::ChunkData as u8,
                                             },
                                             payload: PacketPayload::ChunkData(ChunkDataPacket {
                                                 cx,
@@ -264,7 +281,6 @@ impl EmbeddedServer {
                                     }
                                 }
                             }
-                        }
 
                         let chunks_after = chunks_sent.len();
                         if chunks_after > chunks_before {

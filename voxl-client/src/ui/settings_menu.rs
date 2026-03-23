@@ -130,6 +130,7 @@ pub fn settings_menu(ctx: &egui::Context, config: &mut GameConfig, open: &mut bo
                         GameAction::ReleaseMouse,
                         GameAction::IncreaseSpeed,
                         GameAction::DecreaseSpeed,
+                        GameAction::Sneak,
                     ], config);
 
                     controls_section(ui, "Interface", &[
@@ -252,6 +253,7 @@ fn format_action_name(action: GameAction) -> String {
         GameAction::ReleaseMouse => "Libérer souris",
         GameAction::IncreaseSpeed => "Augmenter vitesse",
         GameAction::DecreaseSpeed => "Diminuer vitesse",
+        GameAction::Sneak => "Sneak (Marcher)",
         GameAction::ToggleDebugUI => "Interface debug",
         GameAction::DumpStats => "Sauver stats",
         GameAction::OpenChat => "Ouvrir chat",

@@ -129,7 +129,7 @@ impl GameMode {
 
 impl Default for GameMode {
     fn default() -> Self {
-        GameMode::Creative { fly_enabled: true }
+        GameMode::Creative { fly_enabled: false }  // Start without fly by default
     }
 }
 
@@ -146,6 +146,12 @@ pub struct PlayerControlled {
     pub is_sprinting: bool,
     /// Speed multiplier when sprinting
     pub sprint_multiplier: f32,
+    /// Sneaking (crouching) - slower movement, prevents falling
+    pub is_sneaking: bool,
+    /// Movement speed multiplier when sneaking
+    pub sneak_multiplier: f32,
+    /// Current eye height (smoothly interpolated)
+    pub current_eye_height: f32,
 }
 
 impl PlayerControlled {
@@ -155,7 +161,10 @@ impl PlayerControlled {
             look_sensitivity: 0.002,
             pitch_limits: (-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01),
             is_sprinting: false,
-            sprint_multiplier: 2.5,
+            sprint_multiplier: 2.0,   // Sprint: 2x walking speed (ground)
+            is_sneaking: false,
+            sneak_multiplier: 0.3,    // Sneak: 30% of walking speed
+            current_eye_height: 0.7,  // Start at standing eye height
         }
     }
 
@@ -237,16 +246,20 @@ impl Default for LookDirection {
 /// Marker: this entity is affected by physics
 #[derive(Debug, Clone, Copy)]
 pub struct PhysicsAffected {
-    /// Ground movement speed
+    /// Target ground movement speed
     pub move_speed: f32,
     /// Applied gravity (m/s²)
     pub gravity: f32,
     /// Terminal fall velocity
     pub terminal_velocity: f32,
-    /// Ground friction factor (0-1)
-    pub ground_friction: f32,
-    /// Air resistance factor (0-1)
-    pub air_resistance: f32,
+    /// Ground acceleration (how fast we reach move_speed)
+    pub ground_acceleration: f32,
+    /// Ground drag/friction (velocity decay per second)
+    pub ground_drag: f32,
+    /// Air acceleration
+    pub air_acceleration: f32,
+    /// Air drag
+    pub air_drag: f32,
     /// Jump height
     pub jump_height: f32,
     /// Is the entity on the ground?
@@ -256,12 +269,14 @@ pub struct PhysicsAffected {
 impl PhysicsAffected {
     pub fn new() -> Self {
         Self {
-            move_speed: 8.0,
-            gravity: 25.0,
-            terminal_velocity: 50.0,
-            ground_friction: 0.1,
-            air_resistance: 0.02,
-            jump_height: 1.2,
+            move_speed: 6.0,        // Increased base walking speed
+            gravity: 32.0,         // Minecraft gravity
+            terminal_velocity: 78.4, // Minecraft terminal velocity
+            ground_acceleration: 80.0,  // Fast acceleration on ground
+            ground_drag: 15.0,     // Ground friction (Minecraft-style)
+            air_acceleration: 15.0,    // Slower acceleration in air
+            air_drag: 2.0,         // Less air drag
+            jump_height: 1.252,    // Minecraft jump height
             on_ground: false,
         }
     }

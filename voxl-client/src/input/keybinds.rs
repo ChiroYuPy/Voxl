@@ -47,6 +47,8 @@ pub enum GameAction {
     IncreaseSpeed,
     DecreaseSpeed,
 
+    Sneak,
+
     ToggleDebugUI,
     DumpStats,
     OpenChat,
@@ -121,6 +123,9 @@ impl Default for KeyBindings {
             InputButton::named(NamedKey::Space),
         ]);
         bindings.insert(GameAction::MoveDown, vec![
+            InputButton::named(NamedKey::Shift),
+        ]);
+        bindings.insert(GameAction::Sneak, vec![
             InputButton::named(NamedKey::Shift),
         ]);
 
@@ -244,6 +249,7 @@ impl KeyBindings {
                 "F4" => Some(Key::Named(NamedKey::F4)),
                 "F5" => Some(Key::Named(NamedKey::F5)),
                 "F6" => Some(Key::Named(NamedKey::F6)),
+                "F7" => Some(Key::Named(NamedKey::F7)),
                 _ => None,
             }
         } else {
@@ -282,7 +288,57 @@ impl KeyBindings {
         voxl_common::config::KeyBindingsConfig { bindings }
     }
 
-    /// Crée des bindings depuis une configuration
+    /// Crée des bindings depuis une configuration, avec fallback aux defaults
+    pub fn from_config_or_default(config: &voxl_common::config::KeyBindingsConfig) -> Self {
+        let mut default_bindings = Self::default();
+
+        // Override with config values
+        for (action_name, button_strings) in &config.bindings {
+            let action = match action_name.as_str() {
+                "MoveForward" => GameAction::MoveForward,
+                "MoveBackward" => GameAction::MoveBackward,
+                "MoveLeft" => GameAction::MoveLeft,
+                "MoveRight" => GameAction::MoveRight,
+                "MoveUp" => GameAction::MoveUp,
+                "MoveDown" => GameAction::MoveDown,
+                "LookUp" => GameAction::LookUp,
+                "LookDown" => GameAction::LookDown,
+                "LookLeft" => GameAction::LookLeft,
+                "LookRight" => GameAction::LookRight,
+                "BreakBlock" => GameAction::BreakBlock,
+                "PlaceBlock" => GameAction::PlaceBlock,
+                "PickBlock" => GameAction::PickBlock,
+                "NextBlockType" => GameAction::NextBlockType,
+                "PreviousBlockType" => GameAction::PreviousBlockType,
+                "ToggleMouseCapture" => GameAction::ToggleMouseCapture,
+                "ReleaseMouse" => GameAction::ReleaseMouse,
+                "IncreaseSpeed" => GameAction::IncreaseSpeed,
+                "DecreaseSpeed" => GameAction::DecreaseSpeed,
+                "Sneak" => GameAction::Sneak,
+                "ToggleDebugUI" => GameAction::ToggleDebugUI,
+                "DumpStats" => GameAction::DumpStats,
+                "OpenChat" => GameAction::OpenChat,
+                "ToggleFly" => GameAction::ToggleFly,
+                "CycleGameMode" => GameAction::CycleGameMode,
+                "ToggleChunkBorders" => GameAction::ToggleChunkBorders,
+                "OpenSettings" => GameAction::OpenSettings,
+                _ => continue,
+            };
+
+            // Parser les boutons
+            let buttons: Vec<InputButton> = button_strings.iter()
+                .filter_map(|s| InputButton::from_string_repr(s))
+                .collect();
+
+            if !buttons.is_empty() {
+                default_bindings.bindings.insert(action, buttons);
+            }
+        }
+
+        default_bindings
+    }
+
+    /// Crée des bindings depuis une configuration (legacy, ne pas utiliser - utilise from_config_or_default)
     pub fn from_config(config: &voxl_common::config::KeyBindingsConfig) -> Self {
         let mut bindings = HashMap::new();
 
@@ -308,6 +364,7 @@ impl KeyBindings {
                 "ReleaseMouse" => GameAction::ReleaseMouse,
                 "IncreaseSpeed" => GameAction::IncreaseSpeed,
                 "DecreaseSpeed" => GameAction::DecreaseSpeed,
+                "Sneak" => GameAction::Sneak,
                 "ToggleDebugUI" => GameAction::ToggleDebugUI,
                 "DumpStats" => GameAction::DumpStats,
                 "OpenChat" => GameAction::OpenChat,
@@ -527,7 +584,7 @@ impl InputManager {
     }
 }
 
-const ALL_ACTIONS: [GameAction; 25] = [
+const ALL_ACTIONS: [GameAction; 26] = [
     GameAction::MoveForward,
     GameAction::MoveBackward,
     GameAction::MoveLeft,
@@ -547,6 +604,7 @@ const ALL_ACTIONS: [GameAction; 25] = [
     GameAction::ReleaseMouse,
     GameAction::IncreaseSpeed,
     GameAction::DecreaseSpeed,
+    GameAction::Sneak,
     GameAction::ToggleDebugUI,
     GameAction::OpenChat,
     GameAction::ToggleFly,
