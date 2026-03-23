@@ -10,50 +10,78 @@ pub struct FrameTiming {
     pub gpu_submission_time: Duration,  // Estimated GPU submission time
     pub ecs_systems_time: Duration,     // All ECS systems combined
     pub mesh_processing_time: Duration, // Mesh update processing
+    pub networking_time: Duration,      // Network processing time
+    pub input_time: Duration,           // Input handling time
+    pub world_update_time: Duration,    // World/entity update time
+    pub render_prep_time: Duration,     // Render preparation (frustum culling, etc.)
+    pub ui_time: Duration,              // egui UI time
 }
 
-/// Rolling statistics (average, min, max)
+/// Windowed statistics (average, min, max over last N samples)
 #[derive(Clone, Debug)]
 pub struct RollingStats {
-    pub avg: Duration,
-    pub min: Duration,
-    pub max: Duration,
-    pub samples: u32,
+    samples: VecDeque<Duration>,
+    window_size: usize,
 }
 
 impl Default for RollingStats {
     fn default() -> Self {
         Self {
-            avg: Duration::ZERO,
-            min: Duration::MAX,
-            max: Duration::ZERO,
-            samples: 0,
+            samples: VecDeque::with_capacity(60),  // Keep last 60 samples (~1 second at 60fps)
+            window_size: 60,
         }
     }
 }
 
 impl RollingStats {
-    /// Update statistics with a new sample
-    pub fn update(&mut self, duration: Duration) {
-        self.samples += 1;
-
-        // Update min/max
-        if duration < self.min {
-            self.min = duration;
+    /// Create a new RollingStats with a specific window size
+    pub fn with_window(window_size: usize) -> Self {
+        Self {
+            samples: VecDeque::with_capacity(window_size),
+            window_size,
         }
-        if duration > self.max {
-            self.max = duration;
-        }
-
-        // Update average (running average)
-        let total = self.avg.as_nanos() as u128 * (self.samples - 1) as u128
-            + duration.as_nanos() as u128;
-        self.avg = Duration::from_nanos((total / self.samples as u128) as u64);
     }
 
-    /// Get formatted string for display
+    /// Update statistics with a new sample
+    pub fn update(&mut self, duration: Duration) {
+        self.samples.push_back(duration);
+        if self.samples.len() > self.window_size {
+            self.samples.pop_front();
+        }
+    }
+
+    /// Get the average of samples in the window
+    pub fn avg(&self) -> Duration {
+        if self.samples.is_empty() {
+            return Duration::ZERO;
+        }
+        let total: u128 = self.samples.iter().map(|d| d.as_nanos() as u128).sum();
+        Duration::from_nanos((total / self.samples.len() as u128) as u64)
+    }
+
+    /// Get the minimum value in the window
+    pub fn min(&self) -> Duration {
+        self.samples.iter().copied().min().unwrap_or(Duration::ZERO)
+    }
+
+    /// Get the maximum value in the window
+    pub fn max(&self) -> Duration {
+        self.samples.iter().copied().max().unwrap_or(Duration::ZERO)
+    }
+
+    /// Get the number of samples in the window
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// Get formatted string for display (average in ms)
     pub fn as_ms(&self) -> f64 {
-        self.avg.as_secs_f64() * 1000.0
+        self.avg().as_secs_f64() * 1000.0
+    }
+
+    /// Get the average duration
+    pub fn average(&self) -> Duration {
+        self.avg()
     }
 }
 
@@ -93,6 +121,11 @@ pub struct PerformanceSnapshot {
     pub frame_timing: RollingStats,
     pub cpu_timing: RollingStats,
     pub gpu_timing: RollingStats,
+    pub networking_timing: RollingStats,
+    pub input_timing: RollingStats,
+    pub world_update_timing: RollingStats,
+    pub render_prep_timing: RollingStats,
+    pub ui_timing: RollingStats,
     pub system_timings: HashMap<String, RollingStats>,
     pub memory: MemoryStats,
     pub timestamp: Instant,
@@ -105,6 +138,11 @@ impl Default for PerformanceSnapshot {
             frame_timing: RollingStats::default(),
             cpu_timing: RollingStats::default(),
             gpu_timing: RollingStats::default(),
+            networking_timing: RollingStats::default(),
+            input_timing: RollingStats::default(),
+            world_update_timing: RollingStats::default(),
+            render_prep_timing: RollingStats::default(),
+            ui_timing: RollingStats::default(),
             system_timings: HashMap::new(),
             memory: MemoryStats::default(),
             timestamp: Instant::now(),
@@ -128,6 +166,11 @@ pub struct PerformanceCollector {
     frame_stats: RollingStats,
     cpu_stats: RollingStats,
     gpu_stats: RollingStats,
+    networking_stats: RollingStats,
+    input_stats: RollingStats,
+    world_update_stats: RollingStats,
+    render_prep_stats: RollingStats,
+    ui_stats: RollingStats,
 
     // Per-system timing collectors
     system_timings: HashMap<String, RollingStats>,
@@ -159,6 +202,11 @@ impl PerformanceCollector {
             frame_stats: RollingStats::default(),
             cpu_stats: RollingStats::default(),
             gpu_stats: RollingStats::default(),
+            networking_stats: RollingStats::default(),
+            input_stats: RollingStats::default(),
+            world_update_stats: RollingStats::default(),
+            render_prep_stats: RollingStats::default(),
+            ui_stats: RollingStats::default(),
             system_timings: HashMap::new(),
             memory: MemoryStats::default(),
             last_ui_update: Instant::now(),
@@ -232,6 +280,46 @@ impl PerformanceCollector {
         }
     }
 
+    /// Record networking processing time
+    pub fn record_networking_time(&mut self, duration: Duration) {
+        if let Some(ref mut timing) = self.current_frame_timing {
+            timing.networking_time = duration;
+        }
+        self.networking_stats.update(duration);
+    }
+
+    /// Record input handling time
+    pub fn record_input_time(&mut self, duration: Duration) {
+        if let Some(ref mut timing) = self.current_frame_timing {
+            timing.input_time = duration;
+        }
+        self.input_stats.update(duration);
+    }
+
+    /// Record world/entity update time
+    pub fn record_world_update_time(&mut self, duration: Duration) {
+        if let Some(ref mut timing) = self.current_frame_timing {
+            timing.world_update_time = duration;
+        }
+        self.world_update_stats.update(duration);
+    }
+
+    /// Record render preparation time (frustum culling, etc.)
+    pub fn record_render_prep_time(&mut self, duration: Duration) {
+        if let Some(ref mut timing) = self.current_frame_timing {
+            timing.render_prep_time = duration;
+        }
+        self.render_prep_stats.update(duration);
+    }
+
+    /// Record UI (egui) time
+    pub fn record_ui_time(&mut self, duration: Duration) {
+        if let Some(ref mut timing) = self.current_frame_timing {
+            timing.ui_time = duration;
+        }
+        self.ui_stats.update(duration);
+    }
+
     /// Update memory statistics
     pub fn update_memory_stats<F>(&mut self, f: F)
     where
@@ -256,14 +344,19 @@ impl PerformanceCollector {
     /// Update the snapshot with current statistics
     fn update_snapshot(&mut self) {
         let snapshot = PerformanceSnapshot {
-            fps: if self.frame_stats.avg.as_nanos() > 0 {
-                1_000_000_000.0 / self.frame_stats.avg.as_nanos() as f32
+            fps: if self.frame_stats.avg().as_nanos() > 0 {
+                1_000_000_000.0 / self.frame_stats.avg().as_nanos() as f32
             } else {
                 0.0
             },
             frame_timing: self.frame_stats.clone(),
             cpu_timing: self.cpu_stats.clone(),
             gpu_timing: self.gpu_stats.clone(),
+            networking_timing: self.networking_stats.clone(),
+            input_timing: self.input_stats.clone(),
+            world_update_timing: self.world_update_stats.clone(),
+            render_prep_timing: self.render_prep_stats.clone(),
+            ui_timing: self.ui_stats.clone(),
             system_timings: self.system_timings.clone(),
             memory: self.memory.clone(),
             timestamp: Instant::now(),
@@ -274,8 +367,8 @@ impl PerformanceCollector {
 
     /// Get current FPS estimate
     pub fn fps(&self) -> f32 {
-        if self.frame_stats.avg.as_nanos() > 0 {
-            1_000_000_000.0 / self.frame_stats.avg.as_nanos() as f32
+        if self.frame_stats.avg().as_nanos() > 0 {
+            1_000_000_000.0 / self.frame_stats.avg().as_nanos() as f32
         } else {
             0.0
         }

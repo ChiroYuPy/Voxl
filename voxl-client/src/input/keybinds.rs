@@ -48,6 +48,7 @@ pub enum GameAction {
     DecreaseSpeed,
 
     ToggleDebugUI,
+    DumpStats,
     OpenChat,
 
     ToggleFly,
@@ -157,6 +158,10 @@ impl Default for KeyBindings {
 
         bindings.insert(GameAction::ToggleDebugUI, vec![
             InputButton::named(NamedKey::F3),
+        ]);
+
+        bindings.insert(GameAction::DumpStats, vec![
+            InputButton::named(NamedKey::F7),
         ]);
 
         bindings.insert(GameAction::OpenChat, vec![
@@ -304,6 +309,7 @@ impl KeyBindings {
                 "IncreaseSpeed" => GameAction::IncreaseSpeed,
                 "DecreaseSpeed" => GameAction::DecreaseSpeed,
                 "ToggleDebugUI" => GameAction::ToggleDebugUI,
+                "DumpStats" => GameAction::DumpStats,
                 "OpenChat" => GameAction::OpenChat,
                 "ToggleFly" => GameAction::ToggleFly,
                 "CycleGameMode" => GameAction::CycleGameMode,

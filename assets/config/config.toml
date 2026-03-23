@@ -2,7 +2,7 @@
 render_distance = 4
 ao_intensity = 0.7
 vsync = false
-max_fps = 60
+max_fps = 0
 
 [server]
 mode = "embedded"  # "embedded" for local server, "remote" for remote server

@@ -3,9 +3,10 @@
 //! Manages the connection to the server (embedded or remote) and game state.
 
 use voxl_common::{
-    VoxelWorld, SharedVoxelRegistry, EntityWorld, config::ServerMode,
+    VoxelWorld, SharedVoxelRegistry, EntityWorld, config::ServerMode, network::*,
 };
 use crate::networking::NetworkClient;
+use crate::networking::async_task::{NetworkTask, NetworkEvent};
 use crate::embedded_server::EmbeddedServer;
 use std::sync::{Arc, RwLock};
 use hecs::Entity;
@@ -23,8 +24,10 @@ pub enum ConnectionState {
 
 /// Game state - manages server connection
 pub struct GameState {
-    /// Network client (for remote or embedded)
+    /// Network client (legacy, kept for compatibility)
     network_client: NetworkClient,
+    /// Background network task
+    network_task: Option<NetworkTask>,
     /// Embedded server (if running)
     embedded_server: Option<EmbeddedServer>,
     /// Connection state
@@ -33,6 +36,8 @@ pub struct GameState {
     player_entity: Option<Entity>,
     /// Voxel registry (for embedded server mode)
     registry: Option<SharedVoxelRegistry>,
+    /// Our player ID
+    player_id: Option<PlayerId>,
 }
 
 impl GameState {
@@ -40,10 +45,12 @@ impl GameState {
     pub fn new() -> Self {
         Self {
             network_client: NetworkClient::new(),
+            network_task: None,
             embedded_server: None,
             connection_state: ConnectionState::Disconnected,
             player_entity: None,
             registry: None,
+            player_id: None,
         }
     }
 
@@ -57,6 +64,9 @@ impl GameState {
         info!("[GameState] Starting game: mode={:?}, address={}, port={}", mode, address, port);
 
         self.connection_state = ConnectionState::Connecting;
+
+        // Start background network task
+        self.network_task = Some(NetworkTask::start());
 
         match mode {
             ServerMode::Embedded => {
@@ -88,34 +98,57 @@ impl GameState {
 
                 // Connect to embedded server (localhost)
                 let server_addr = format!("127.0.0.1:{}", port);
-                self.connect_to_server(&server_addr, username).await?;
+                self.connect_to_server_async(&server_addr, username).await;
             }
             ServerMode::Remote => {
                 // Connect to remote server
                 let server_addr = format!("{}:{}", address, port);
-                self.connect_to_server(&server_addr, username).await?;
+                self.connect_to_server_async(&server_addr, username).await;
             }
         }
 
         Ok(())
     }
 
-    /// Connects to a server
-    async fn connect_to_server(&mut self, address: &str, username: &str) -> Result<(), String> {
+    /// Connects to a server (async, non-blocking)
+    async fn connect_to_server_async(&mut self, address: &str, username: &str) {
         info!("[GameState] Connecting to server at '{}' as '{}'...", address, username);
 
-        match self.network_client.connect(address, username).await {
-            Ok(()) => {
-                self.connection_state = ConnectionState::Connected;
-                info!("[GameState] Connected to server!");
-                Ok(())
+        if let Some(task) = &self.network_task {
+            task.connect(address.to_string(), username.to_string()).await;
+        }
+    }
+
+    /// Process network events from background task (non-blocking)
+    /// Call this in the main game loop to handle received packets
+    pub fn process_network_events(&mut self) -> Vec<NetworkEvent> {
+        if let Some(task) = &mut self.network_task {
+            let events = task.drain_events();
+
+            // Process events and update connection state
+            for event in &events {
+                match event {
+                    NetworkEvent::Connected { server_name, player_id } => {
+                        info!("[GameState] Connected to server: {} (player ID: {})", server_name, player_id);
+                        self.connection_state = ConnectionState::Connected;
+                        self.player_id = Some(*player_id);
+                    }
+                    NetworkEvent::ConnectionFailed { reason } => {
+                        error!("[GameState] Connection failed: {}", reason);
+                        self.connection_state = ConnectionState::Failed(reason.clone());
+                    }
+                    NetworkEvent::Disconnected { .. } => {
+                        info!("[GameState] Disconnected from server");
+                        self.connection_state = ConnectionState::Disconnected;
+                        self.player_id = None;
+                    }
+                    _ => {}
+                }
             }
-            Err(e) => {
-                let msg = format!("Failed to connect: {}", e);
-                error!("[GameState] {}", msg);
-                self.connection_state = ConnectionState::Failed(msg.clone());
-                Err(msg)
-            }
+
+            events
+        } else {
+            Vec::new()
         }
     }
 
@@ -123,7 +156,9 @@ impl GameState {
     pub async fn disconnect(&mut self) {
         info!("[GameState] Disconnecting...");
 
-        self.network_client.disconnect().await;
+        if let Some(task) = &self.network_task {
+            task.disconnect().await;
+        }
 
         if let Some(server) = self.embedded_server.take() {
             server.stop();
@@ -131,12 +166,13 @@ impl GameState {
 
         self.connection_state = ConnectionState::Disconnected;
         self.player_entity = None;
+        self.player_id = None;
 
         info!("[GameState] Disconnected");
     }
 
-    /// Sends player update to server
-    pub async fn send_player_update(
+    /// Sends player update to server (non-blocking)
+    pub fn send_player_update(
         &mut self,
         x: f32,
         y: f32,
@@ -147,14 +183,25 @@ impl GameState {
         sequence: u32,
     ) -> Result<(), String> {
         if !self.is_connected() {
-            return Ok(()); // Silently ignore if not connected
+            return Ok(());
         }
 
-        self.network_client.send_player_update(x, y, z, yaw, pitch, on_ground, sequence).await
+        if let Some(task) = &self.network_task {
+            let update = PlayerUpdatePacket {
+                sequence,
+                x, y, z,
+                yaw, pitch,
+                on_ground,
+            };
+            task.try_send_player_update(update);
+            Ok(())
+        } else {
+            Err("Network task not running".to_string())
+        }
     }
 
-    /// Sends block action to server
-    pub async fn send_block_action(
+    /// Sends block action to server (non-blocking)
+    pub fn send_block_action(
         &mut self,
         x: i32,
         y: i32,
@@ -166,25 +213,30 @@ impl GameState {
             return Ok(());
         }
 
-        self.network_client.send_block_action(x, y, z, action, sequence).await
+        if let Some(task) = &self.network_task {
+            let block_action = BlockActionPacket {
+                sequence,
+                x, y, z,
+                action,
+            };
+            task.try_send_block_action(block_action);
+            Ok(())
+        } else {
+            Err("Network task not running".to_string())
+        }
     }
 
-    /// Requests chunks from server
-    pub async fn request_chunks(&mut self, chunks: Vec<(i32, i32, i32)>) -> Result<(), String> {
-        if !self.is_connected() {
-            return Ok(());
-        }
-
-        self.network_client.request_chunks(chunks).await
+    /// Requests chunks from server (deprecated - chunks are auto-sent)
+    #[deprecated(note = "Server now auto-sends chunks")]
+    pub async fn request_chunks(&mut self, _chunks: Vec<(i32, i32, i32)>) -> Result<(), String> {
+        Ok(())
     }
 
-    /// Receives and processes a packet from server (with timeout)
-    pub async fn receive_packet(&mut self, timeout_ms: u64) -> Result<Option<voxl_common::network::Packet>, String> {
-        if !self.is_connected() {
-            return Ok(None);
-        }
-
-        self.network_client.receive_packet(timeout_ms).await
+    /// Receives and processes a packet from server (deprecated - use process_network_events)
+    #[deprecated(note = "Use process_network_events instead")]
+    pub async fn receive_packet(&mut self, _timeout_ms: u64) -> Result<Option<voxl_common::network::Packet>, String> {
+        // This method is kept for compatibility but events should be processed via process_network_events
+        Ok(None)
     }
 
     /// Returns true if connected to server
@@ -199,7 +251,7 @@ impl GameState {
 
     /// Returns our player ID
     pub fn player_id(&self) -> Option<u32> {
-        self.network_client.player_id()
+        self.player_id
     }
 }
 

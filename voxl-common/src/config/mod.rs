@@ -15,8 +15,8 @@ pub struct GraphicsSettings {
     pub ao_intensity: f32,
     /// Enable/disable VSync
     pub vsync: bool,
-    /// Maximum FPS (None = unlimited). Only used when vsync is disabled.
-    pub max_fps: Option<u32>,
+    /// Maximum FPS (0 = unlimited, negative values are clamped to 0). Only used when vsync is disabled.
+    pub max_fps: i32,
 }
 
 impl Default for GraphicsSettings {
@@ -25,7 +25,20 @@ impl Default for GraphicsSettings {
             render_distance: 8,
             ao_intensity: 0.7,
             vsync: true,
-            max_fps: Some(144),
+            max_fps: 144,
+        }
+    }
+}
+
+impl GraphicsSettings {
+    /// Get effective max FPS (None for unlimited, Some(n) for limited)
+    pub fn effective_max_fps(&self) -> Option<u32> {
+        if self.vsync {
+            None // VSync controls FPS
+        } else if self.max_fps <= 0 {
+            None // 0 or negative means unlimited
+        } else {
+            Some(self.max_fps as u32)
         }
     }
 }

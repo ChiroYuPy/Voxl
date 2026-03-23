@@ -71,29 +71,26 @@ pub fn settings_menu(ctx: &egui::Context, config: &mut GameConfig, open: &mut bo
                         ui.horizontal(|ui| {
                             ui.label("FPS Maximum:");
 
-                            let current_max = config.graphics.max_fps.unwrap_or(144) as i32;
+                            let is_unlimited = config.graphics.max_fps <= 0;
 
-                            if config.graphics.max_fps.is_some() {
-                                let mut max_fps_value = current_max;
-                                ui.add(egui::Slider::new(&mut max_fps_value, 30..=360)
+                            if is_unlimited {
+                                ui.label("Illimité");
+                            } else {
+                                ui.add(egui::Slider::new(&mut config.graphics.max_fps, 0..=360)
                                     .text("fps")
                                     .step_by(10.0));
-                                if max_fps_value != current_max {
-                                    config.graphics.max_fps = Some(max_fps_value as u32);
-                                }
-                            } else {
-                                ui.label("Illimité");
+                                ui.label("(0 = Illimité)");
                             }
 
-                            if ui.button(if config.graphics.max_fps.is_some() { "Illimité" } else { "Limiter" }).clicked() {
-                                if config.graphics.max_fps.is_some() {
-                                    config.graphics.max_fps = None;
+                            if ui.button(if is_unlimited { "Limiter" } else { "Illimité" }).clicked() {
+                                if is_unlimited {
+                                    config.graphics.max_fps = 144;
                                 } else {
-                                    config.graphics.max_fps = Some(144);
+                                    config.graphics.max_fps = 0;
                                 }
                             }
                         });
-                        ui.label("Limite le nombre d'images par seconde.");
+                        ui.label("Limite le nombre d'images par seconde (0 = illimité).");
                     }
 
                     ui.add_space(20.0);
@@ -256,6 +253,7 @@ fn format_action_name(action: GameAction) -> String {
         GameAction::IncreaseSpeed => "Augmenter vitesse",
         GameAction::DecreaseSpeed => "Diminuer vitesse",
         GameAction::ToggleDebugUI => "Interface debug",
+        GameAction::DumpStats => "Sauver stats",
         GameAction::OpenChat => "Ouvrir chat",
         GameAction::ToggleFly => "Mode vol",
         GameAction::CycleGameMode => "Changer mode",

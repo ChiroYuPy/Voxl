@@ -16,6 +16,9 @@ pub mod server_integration;
 pub mod ui;
 pub mod worldgen;
 
+// Re-export networking types
+pub use networking::async_task::NetworkEvent;
+
 // Re-export common types from voxl-common
 pub use voxl_common::{
     VoxelChunk, VoxelWorld, VoxelRegistry, SharedVoxelRegistry,

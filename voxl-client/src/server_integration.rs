@@ -8,6 +8,7 @@ use voxl_common::{
 };
 use crate::game_state::GameState;
 use crate::server_chunk_tracker::ChunkTracker;
+use crate::networking::async_task::NetworkEvent;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tracing::{info, warn, error, debug};
@@ -135,57 +136,109 @@ impl ServerIntegration {
         self.game_state.start(mode, address, port, username).await
     }
 
-    /// Processes packets from server (call this in game loop)
-    pub async fn process_packets(
-        &mut self,
-        world: &Arc<RwLock<VoxelWorld>>,
-        entities: &EntityWorld,
-    ) {
-        // Process MORE packets with LONGER timeout to receive chunk data
-        let mut received_any = false;
-        let mut received_count = 0;
+    /// Processes network events from background task (non-blocking)
+    /// Call this in the main game loop - NO BLOCKING!
+    pub fn process_network_events(&mut self, world: &Arc<RwLock<VoxelWorld>>, entities: &EntityWorld) {
+        let events = self.game_state.process_network_events();
 
-        for _ in 0..100 {  // Process up to 100 packets per frame (matches server send rate)
-            match self.game_state.receive_packet(10).await {  // 10ms timeout to receive chunk data
-                Ok(Some(packet)) => {
-                    if !received_any {
-                        debug!("[Server] Starting to receive packets...");
-                        received_any = true;
-                    }
-                    received_count += 1;
-
-                    // Log packet types for debugging
-                    match packet.payload {
-                        PacketPayload::ChunkData(_) => {
-                            debug!("[Server] Received ChunkData packet (#{})", received_count);
-                        }
-                        _ => {}
-                    }
-
+        for event in events {
+            match event {
+                NetworkEvent::Packet(packet) => {
+                    // Handle generic packets
+                    debug!("[Server] Received packet: {:?}", packet.header.packet_type);
                     process_server_packet(packet, world, entities, &self.chunk_tracker);
                 }
-                Ok(None) => {
-                    // Timeout - no more packets for now
-                    break;
+                NetworkEvent::PlayerUpdate(update) => {
+                    // Handle player update (client->server packet, doesn't include player_id)
+                    debug!("[Server] Received player update packet: ({:.1}, {:.1}, {:.1})",
+                        update.x, update.y, update.z);
+                    // TODO: Track player position if needed
                 }
-                Err(e) => {
-                    // Non-blocking sockets return "unexpected end of file" when no data available
-                    // Only log actual errors, not expected would-block conditions
-                    if !e.contains("unexpected end of file") && !e.contains("would block") {
-                        error!("[Server] Failed to receive packet: {}", e);
+                NetworkEvent::BlockChange(change) => {
+                    // Handle block change
+                    debug!("[Server] Block changed at ({},{},{}) -> {}",
+                        change.x, change.y, change.z, change.block_id);
+
+                    let mut world = world.write().unwrap();
+                    let result = world.set_voxel(change.x, change.y, change.z, Some(change.block_id));
+
+                    // Mark chunk as dirty for remeshing
+                    let cx = result.modified_chunk.0;
+                    let cy = result.modified_chunk.1;
+                    let cz = result.modified_chunk.2;
+                    self.chunk_tracker.on_server_update((cx, cy, cz));
+
+                    debug!("[Server] Chunk ({},{},{}) marked dirty after block change",
+                        cx, cy, cz);
+                }
+                NetworkEvent::ChunkData(data) => {
+                    // Handle chunk data
+                    debug!("[Server] Received chunk data for ({},{},{})", data.cx, data.cy, data.cz);
+
+                    match voxl_common::VoxelChunk::from_bytes(&data.data) {
+                        Ok(chunk) => {
+                            debug!("[Server] Inserting chunk ({},{},{})", data.cx, data.cy, data.cz);
+
+                            let mut world = world.write().unwrap();
+                            world.insert_chunk(data.cx, data.cy, data.cz, chunk);
+
+                            // Mark chunk as loaded - will trigger meshing
+                            self.chunk_tracker.on_chunk_loaded((data.cx, data.cy, data.cz));
+                        }
+                        Err(e) => {
+                            error!("[Server] Failed to deserialize chunk ({},{},{}): {}",
+                                data.cx, data.cy, data.cz, e);
+                        }
                     }
-                    break;
+                }
+                NetworkEvent::EntitySpawn(spawn) => {
+                    info!("[Server] Entity {} spawned at ({:.1}, {:.1}, {:.1}), type: {:?}",
+                        spawn.entity_id, spawn.x, spawn.y, spawn.z, spawn.entity_type);
+                    // TODO: Spawn entity in client ECS
+                }
+                NetworkEvent::PlayerConnected(conn) => {
+                    info!("[Server] Player '{}' (ID: {}) connected at ({:.1}, {:.1}, {:.1})",
+                        conn.username, conn.player_id, conn.x, conn.y, conn.z);
+                    // TODO: Spawn player entity
+                }
+                NetworkEvent::PlayerDisconnected(disconn) => {
+                    info!("[Server] Player {} disconnected: {:?}",
+                        disconn.player_id, disconn.reason);
+                    // TODO: Despawn player entity
+                }
+                NetworkEvent::Chat(chat) => {
+                    info!("[Chat] {}: {}", chat.username, chat.message);
+                    // TODO: Add to chat log
+                }
+                NetworkEvent::Kicked(kicked) => {
+                    error!("[Server] Kicked from server: {}", kicked.reason);
+                    // TODO: Handle kick - show message, return to menu
+                }
+                NetworkEvent::Connected { server_name, player_id } => {
+                    info!("[Server] Connected to {} (player ID: {})", server_name, player_id);
+                }
+                NetworkEvent::ConnectionFailed { reason } => {
+                    error!("[Server] Connection failed: {}", reason);
+                }
+                NetworkEvent::Disconnected { reason } => {
+                    info!("[Server] Disconnected: {:?}", reason);
                 }
             }
         }
-
-        if received_count > 0 {
-            debug!("[Server] Processed {} packets this frame", received_count);
-        }
     }
 
-    /// Sends player update to server
-    pub async fn send_player_update(
+    /// Processes packets from server (DEPRECATED - use process_network_events)
+    #[deprecated(note = "Use process_network_events instead")]
+    pub async fn process_packets(
+        &mut self,
+        _world: &Arc<RwLock<VoxelWorld>>,
+        _entities: &EntityWorld,
+    ) {
+        // This is now a no-op - use process_network_events from the main loop instead
+    }
+
+    /// Sends player update to server (non-blocking)
+    pub fn send_player_update(
         &mut self,
         x: f32,
         y: f32,
@@ -195,13 +248,13 @@ impl ServerIntegration {
         on_ground: bool,
         sequence: u32,
     ) {
-        if let Err(e) = self.game_state.send_player_update(x, y, z, yaw, pitch, on_ground, sequence).await {
+        if let Err(e) = self.game_state.send_player_update(x, y, z, yaw, pitch, on_ground, sequence) {
             error!("[Network] Failed to send player update: {}", e);
         }
     }
 
-    /// Sends block action to server
-    pub async fn send_block_action(
+    /// Sends block action to server (non-blocking)
+    pub fn send_block_action(
         &mut self,
         x: i32,
         y: i32,
@@ -209,7 +262,7 @@ impl ServerIntegration {
         action: BlockActionType,
         sequence: u32,
     ) {
-        if let Err(e) = self.game_state.send_block_action(x, y, z, action, sequence).await {
+        if let Err(e) = self.game_state.send_block_action(x, y, z, action, sequence) {
             error!("[Network] Failed to send block action: {}", e);
         }
     }

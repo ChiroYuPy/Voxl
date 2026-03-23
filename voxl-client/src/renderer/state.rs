@@ -1527,7 +1527,10 @@ impl WgpuState {
         let aspect_ratio = self.surface_config.width as f32 / self.surface_config.height as f32;
 
         // Frustum culling : mettre à jour les chunks visibles
+        let render_prep_start = std::time::Instant::now();
         self.update_visible_chunks(aspect_ratio);
+        let render_prep_duration = render_prep_start.elapsed();
+        self.performance_collector_mut().record_render_prep_time(render_prep_duration);
 
         let view_proj = self.camera.view_projection(aspect_ratio);
         let view_proj_array: [[f32; 4]; 4] = view_proj.to_cols_array_2d();
@@ -1542,19 +1545,35 @@ impl WgpuState {
         // Show settings menu before world borrow
         self.show_settings_menu_if_open();
 
-        let world_ref = if let Ok(w) = self.world.read() { w } else { return Ok(()) };
+        // Calculate chunk coordinates, block count, camera forward, and target block (needs world borrow)
+        let (pos, chunk_x, chunk_y, chunk_z, yaw, pitch, block_count, camera_forward, target_block) = {
+            let world_ref = if let Ok(w) = self.world.read() { w } else { return Ok(()) };
 
-        // Calculate chunk coordinates
-        let pos = self.camera.position;
-        let chunk_x = pos.x.floor() as i32 / 16;
-        let chunk_y = pos.y.floor() as i32 / 16;
-        let chunk_z = pos.z.floor() as i32 / 16;
+            let pos = self.camera.position;
+            let forward = self.camera.forward();
+            let chunk_x = pos.x.floor() as i32 / 16;
+            let chunk_y = pos.y.floor() as i32 / 16;
+            let chunk_z = pos.z.floor() as i32 / 16;
 
-        // Calculate yaw and pitch (convert radians to degrees)
-        let yaw = self.camera.yaw * 180.0 / std::f32::consts::PI;
-        let pitch = self.camera.pitch * 180.0 / std::f32::consts::PI;
+            // Calculate yaw and pitch (convert radians to degrees)
+            let yaw = self.camera.yaw * 180.0 / std::f32::consts::PI;
+            let pitch = self.camera.pitch * 180.0 / std::f32::consts::PI;
 
-        let block_count = world_ref.registry().len();
+            let block_count = world_ref.registry().len();
+
+            // Get target block info with block name
+            let target_block = self.highlight_target.as_ref().and_then(|target| {
+                // Get the block at the target position
+                world_ref.get_voxel_opt(target.x, target.y, target.z)
+                    .and_then(|id| {
+                        world_ref.registry().get(id)
+                            .map(|def| def.name.clone())
+                            .map(|name| (target.x, target.y, target.z, target.face, name))
+                    })
+            });
+
+            (pos, chunk_x, chunk_y, chunk_z, yaw, pitch, block_count, (forward.x, forward.y, forward.z), target_block)
+        }; // world_ref is dropped here
 
         // Update egui - set pixels_per_point on context before frame
         self.egui_state.ctx.set_pixels_per_point(self.egui_state.pixels_per_point);
@@ -1567,19 +1586,22 @@ impl WgpuState {
             events: std::mem::take(&mut self.egui_events),
             ..Default::default()
         };
-        self.egui_state.context_mut().begin_frame(raw_input);
 
-        // Get performance snapshot for UI
+        // Start UI timing
+        let ui_start = std::time::Instant::now();
+        self.egui_state.context_mut().begin_frame(raw_input);
         let perf_snapshot = self.performance_collector.snapshot();
 
         self.egui_state.show_debug_ui(
             (pos.x, pos.y, pos.z),
+            camera_forward,
             yaw,
             pitch,
             (chunk_x, chunk_y, chunk_z),
+            target_block,
             selected_block,
             block_count,
-            perf_snapshot,
+            &perf_snapshot,
             self.visible_chunks.len(),
             self.chunk_meshes.len(),
         );
@@ -1596,6 +1618,10 @@ impl WgpuState {
 
         let egui_output = self.egui_state.context_mut().end_frame();
         let paint_jobs = self.egui_state.context().tessellate(egui_output.shapes, self.egui_state.pixels_per_point);
+
+        // Record UI timing
+        let ui_duration = ui_start.elapsed();
+        self.performance_collector_mut().record_ui_time(ui_duration);
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -1818,6 +1844,46 @@ impl WgpuState {
         self.egui_state.enabled = !self.egui_state.enabled;
     }
 
+    /// Request stats dump to file (triggered by F7)
+    pub fn request_dump_stats(&mut self) {
+        self.egui_state.request_dump_stats();
+    }
+
+    /// Check if stats dump was requested and perform it
+    pub fn check_dump_stats(&mut self) {
+        // Get current state info needed for stats dump
+        let (camera_pos, camera_yaw, camera_pitch) = {
+            let cam = &self.camera;
+            ((cam.position.x, cam.position.y, cam.position.z), cam.yaw, cam.pitch)
+        };
+
+        let (chunk_coords, selected_block, block_count, visible_chunks, total_chunks) = {
+            let pos = self.camera.position;
+            let chunk_x = pos.x.floor() as i32 / 16;
+            let chunk_y = pos.y.floor() as i32 / 16;
+            let chunk_z = pos.z.floor() as i32 / 16;
+
+            let block_count = if let Ok(world) = self.world.read() {
+                world.registry().len()
+            } else {
+                0
+            };
+
+            let visible = self.visible_chunks.len();
+            let total = self.chunk_meshes.len();
+
+            ((chunk_x, chunk_y, chunk_z), (0, "None".to_string()), block_count, visible, total)
+        };
+
+        let perf = self.performance_collector.snapshot();
+
+        self.egui_state.check_dump_stats(
+            camera_pos, camera_yaw, camera_pitch,
+            chunk_coords, selected_block, block_count,
+            &perf, visible_chunks, total_chunks,
+        );
+    }
+
     /// Get a reference to the performance collector
     pub fn performance_collector(&self) -> &PerformanceCollector {
         &self.performance_collector
@@ -1946,18 +2012,14 @@ impl WgpuState {
 
     /// Check if FPS limiting is enabled
     pub fn should_limit_fps(&self) -> bool {
-        !self.config.graphics.vsync && self.config.graphics.max_fps.is_some()
+        self.config.graphics.effective_max_fps().is_some()
     }
 
     /// Get the minimum frame time for FPS limiting
     pub fn min_frame_time(&self) -> Option<std::time::Duration> {
-        if !self.config.graphics.vsync {
-            self.config.graphics.max_fps.map(|fps| {
-                std::time::Duration::from_secs_f64(1.0 / fps as f64)
-            })
-        } else {
-            None
-        }
+        self.config.graphics.effective_max_fps().map(|fps| {
+            std::time::Duration::from_secs_f64(1.0 / fps as f64)
+        })
     }
 
     /// Enregistrer un événement clavier pour egui

@@ -109,21 +109,16 @@ impl App {
             // Apply change locally (optimistic update)
             wgpu_state.set_voxel(pos.x, pos.y, pos.z, None);
 
-            // Send action to server
-            if let Some(runtime) = &self.tokio_runtime {
-                self.sequence_number = self.sequence_number.wrapping_add(1);
-                let seq = self.sequence_number;
+            // Send action to server (non-blocking)
+            self.sequence_number = self.sequence_number.wrapping_add(1);
+            let seq = self.sequence_number;
 
-                use voxl_common::network::BlockActionType;
-
-                runtime.block_on(async {
-                    self.server_integration.send_block_action(
-                        pos.x, pos.y, pos.z,
-                        BlockActionType::Break,
-                        seq
-                    ).await;
-                });
-            }
+            use voxl_common::network::BlockActionType;
+            self.server_integration.send_block_action(
+                pos.x, pos.y, pos.z,
+                BlockActionType::Break,
+                seq
+            );
         }
     }
 
@@ -185,21 +180,16 @@ impl App {
                      block_name, self.selected_block_id, adjacent.x, adjacent.y, adjacent.z);
             wgpu_state.set_voxel(adjacent.x, adjacent.y, adjacent.z, Some(self.selected_block_id));
 
-            // Send action to server
-            if let Some(runtime) = &self.tokio_runtime {
-                self.sequence_number = self.sequence_number.wrapping_add(1);
-                let seq = self.sequence_number;
+            // Send action to server (non-blocking)
+            self.sequence_number = self.sequence_number.wrapping_add(1);
+            let seq = self.sequence_number;
 
-                use voxl_common::network::BlockActionType;
-
-                runtime.block_on(async {
-                    self.server_integration.send_block_action(
-                        adjacent.x, adjacent.y, adjacent.z,
-                        BlockActionType::Place(self.selected_block_id as u32),
-                        seq
-                    ).await;
-                });
-            }
+            use voxl_common::network::BlockActionType;
+            self.server_integration.send_block_action(
+                adjacent.x, adjacent.y, adjacent.z,
+                BlockActionType::Place(self.selected_block_id as u32),
+                seq
+            );
         }
     }
 
@@ -658,40 +648,39 @@ impl ApplicationHandler for App {
             // Cap delta time to prevent huge jumps (e.g. if window was dragged)
             let delta_time = delta_time.min(0.1);
 
-            // Process server packets (if connected)
-            if let Some(runtime) = &self.tokio_runtime {
-                if let Some(wgpu_state) = &mut self.wgpu_state {
-                    let world = wgpu_state.world().clone();
-                    let entities = wgpu_state.entity_world().clone();
+            // Process network events (non-blocking, runs in background task!)
+            let networking_start = Instant::now();
+            if let Some(wgpu_state) = &mut self.wgpu_state {
+                let world = wgpu_state.world().clone();
+                let entities = wgpu_state.entity_world().clone();
 
-                    runtime.block_on(async {
-                        self.server_integration.process_packets(&world, &entities).await;
-                    });
+                self.server_integration.process_network_events(&world, &entities);
 
-                    // Request meshes for chunks loaded from server
-                    let chunks_to_mesh = self.server_integration.chunk_tracker.get_chunks_to_mesh(50);
-                    if !chunks_to_mesh.is_empty() {
-                        debug!("[App] Requesting meshes for {} chunks from server", chunks_to_mesh.len());
-                        for (cx, cy, cz) in &chunks_to_mesh {
-                            wgpu_state.request_immediate_rebuild(*cx, *cy, *cz);
-                        }
-                        // DON'T mark as clean yet - mesh building is async!
-                        // Chunks will be marked clean when mesh is actually built (see process_meshes_tick)
-                        // The request_mesh_single function already prevents duplicate requests via is_meshing_or_pending
-                    }
-
-                    // Check if chunks have meshes and mark them as clean (EVERY frame)
-                    let marked_count = self.server_integration.chunk_tracker.check_and_mark_meshed(|pos| {
-                        wgpu_state.has_chunk_mesh(pos.0, pos.1, pos.2)
-                    });
-                    if marked_count > 0 {
-                        debug!("[App] Marked {} chunks as meshed (have meshes)", marked_count);
+                // Request meshes for chunks loaded from server
+                let chunks_to_mesh = self.server_integration.chunk_tracker.get_chunks_to_mesh(50);
+                if !chunks_to_mesh.is_empty() {
+                    debug!("[App] Requesting meshes for {} chunks from server", chunks_to_mesh.len());
+                    for (cx, cy, cz) in &chunks_to_mesh {
+                        wgpu_state.request_immediate_rebuild(*cx, *cy, *cz);
                     }
                 }
+
+                // Check if chunks have meshes and mark them as clean (EVERY frame)
+                let marked_count = self.server_integration.chunk_tracker.check_and_mark_meshed(|pos| {
+                    wgpu_state.has_chunk_mesh(pos.0, pos.1, pos.2)
+                });
+                if marked_count > 0 {
+                    debug!("[App] Marked {} chunks as meshed (have meshes)", marked_count);
+                }
+            }
+            let networking_duration = networking_start.elapsed();
+            if let Some(wgpu_state) = &mut self.wgpu_state {
+                wgpu_state.performance_collector_mut().record_networking_time(networking_duration);
             }
 
             // Update ECS systems FIRST (before clearing input state)
             // Skip movement if chat or settings are open
+            let world_update_start = Instant::now();
             let ecs_start = Instant::now();
             if let Some(wgpu_state) = &mut self.wgpu_state {
                 if !wgpu_state.is_chat_open() && !wgpu_state.is_settings_open() {
@@ -725,39 +714,36 @@ impl ApplicationHandler for App {
                     wgpu_state.update_camera_from_player();
 
                     // Send player update to server (if connected)
-                    if let Some(runtime) = &self.tokio_runtime {
-                        let entity_world = wgpu_state.entity_world();
+                    let entity_world = wgpu_state.entity_world();
 
-                        // Get player position and look direction from ECS
-                        let (player_pos, yaw, pitch, on_ground) = {
-                            let mut pos = None;
-                            let mut yaw = 0.0;
-                            let mut pitch = 0.0;
-                            let mut ground = false;
+                    // Get player position and look direction from ECS
+                    let (player_pos, yaw, pitch, on_ground) = {
+                        let mut pos = None;
+                        let mut yaw = 0.0;
+                        let mut pitch = 0.0;
+                        let mut ground = false;
 
-                            for (position, look, physics) in entity_world.world_read().query::<(
-                                &voxl_common::entities::Position,
-                                &voxl_common::entities::LookDirection,
-                                &voxl_common::entities::PhysicsAffected
-                            )>().iter() {
-                                pos = Some((position.x, position.y, position.z));
-                                yaw = look.yaw;
-                                pitch = look.pitch;
-                                ground = physics.on_ground;
-                                break;  // Only first player
-                            }
-
-                            (pos, yaw, pitch, ground)
-                        };
-
-                        if let Some((x, y, z)) = player_pos {
-                            self.sequence_number = self.sequence_number.wrapping_add(1);
-                            let seq = self.sequence_number;
-
-                            runtime.block_on(async {
-                                self.server_integration.send_player_update(x, y, z, yaw, pitch, on_ground, seq).await;
-                            });
+                        for (position, look, physics) in entity_world.world_read().query::<(
+                            &voxl_common::entities::Position,
+                            &voxl_common::entities::LookDirection,
+                            &voxl_common::entities::PhysicsAffected
+                        )>().iter() {
+                            pos = Some((position.x, position.y, position.z));
+                            yaw = look.yaw;
+                            pitch = look.pitch;
+                            ground = physics.on_ground;
+                            break;  // Only first player
                         }
+
+                        (pos, yaw, pitch, ground)
+                    };
+
+                    if let Some((x, y, z)) = player_pos {
+                        self.sequence_number = self.sequence_number.wrapping_add(1);
+                        let seq = self.sequence_number;
+
+                        // Non-blocking send
+                        self.server_integration.send_player_update(x, y, z, yaw, pitch, on_ground, seq);
                     }
                 }
 
@@ -768,10 +754,12 @@ impl ApplicationHandler for App {
                 wgpu_state.performance_collector_mut().record_mesh_processing_time(mesh_duration);
             }
             let ecs_duration = ecs_start.elapsed();
+            let world_update_duration = world_update_start.elapsed();
 
-            // Record CPU time
+            // Record CPU time and world update time
             if let Some(wgpu_state) = &mut self.wgpu_state {
                 wgpu_state.performance_collector_mut().record_cpu_time(ecs_duration);
+                wgpu_state.performance_collector_mut().record_world_update_time(world_update_duration);
             }
 
             // Update memory stats (separate block to avoid borrow conflicts)
@@ -855,11 +843,18 @@ impl ApplicationHandler for App {
                     self.handle_action_previous_block();
                 }
 
-                // Toggle debug UI
+                // Toggle debug UI (F3)
                 if self.input.state().just_pressed(GameAction::ToggleDebugUI) {
                     if let Some(state) = &mut self.wgpu_state {
                         state.toggle_debug_ui();
                         debug!("Debug UI: {}", state.is_debug_ui_enabled());
+                    }
+                }
+
+                // Dump stats to file (F7)
+                if self.input.state().just_pressed(GameAction::DumpStats) {
+                    if let Some(state) = &mut self.wgpu_state {
+                        state.request_dump_stats();
                     }
                 }
 
@@ -952,8 +947,18 @@ impl ApplicationHandler for App {
             // Mettre à jour was_chat_open pour la prochaine frame
             self.was_chat_open = chat_open;
 
+            // Check for stats dump request (F7)
+            if let Some(wgpu_state) = &mut self.wgpu_state {
+                wgpu_state.check_dump_stats();
+            }
+
             // Update input state LAST (clears delta for next frame)
+            let input_start = Instant::now();
             self.input.update();
+            let input_duration = input_start.elapsed();
+            if let Some(wgpu_state) = &mut self.wgpu_state {
+                wgpu_state.performance_collector_mut().record_input_time(input_duration);
+            }
 
             // FPS limiting
             if let Some(state) = &self.wgpu_state {
