@@ -7,6 +7,7 @@ use voxl_common::{
     EntityWorld, ServerSettings,
     entities::{Position, Velocity, LookDirection},
     network::*,
+    CommandResult, ChatMessage,
 };
 use tracing::{info, warn, error};
 use std::sync::{Arc, RwLock};
@@ -16,6 +17,7 @@ use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
+use hecs::Entity;
 
 use crate::player::{ServerPlayer, spawn_player_entity, despawn_player_entity};
 
@@ -86,7 +88,7 @@ impl ConnectionManager {
 }
 
 /// Handles a client connection
-pub async fn handle_connection(
+pub async fn handle_connection<F>(
     mut stream: TcpStream,
     addr: SocketAddr,
     world: Arc<RwLock<VoxelWorld>>,
@@ -94,7 +96,10 @@ pub async fn handle_connection(
     registry: SharedVoxelRegistry,
     settings: ServerSettings,
     connections: ConnectionManager,
-) {
+    execute_command: F,
+) where
+    F: Fn(&str, PlayerId, &str, Option<Entity>, &[(PlayerId, String)]) -> CommandResult + Send + Sync + 'static,
+{
     info!("[Handler] Connection handler started for {}", addr);
 
     // Allocate player ID
@@ -129,7 +134,7 @@ pub async fn handle_connection(
     // TODO: Send EntitySpawn packet to other clients
 
     // Phase 3: Main game loop - handle packets
-    let game_loop_result = game_loop(&mut stream, player_id, &username, &world, &entities, &registry, &settings, &connections).await;
+    let game_loop_result = game_loop(&mut stream, player_id, &username, &world, &entities, &registry, &settings, &connections, &execute_command).await;
 
     // Phase 4: Cleanup (disconnection)
     info!("[Handler] Player '{}' (ID: {}) disconnecting: {:?}",
@@ -234,7 +239,7 @@ async fn handle_handshake(
 }
 
 /// Main game loop for a connected client
-async fn game_loop(
+async fn game_loop<F>(
     stream: &mut TcpStream,
     player_id: PlayerId,
     username: &str,
@@ -243,7 +248,11 @@ async fn game_loop(
     registry: &SharedVoxelRegistry,
     settings: &ServerSettings,
     connections: &ConnectionManager,
-) -> DisconnectReason {
+    execute_command: &F,
+) -> DisconnectReason
+where
+    F: Fn(&str, PlayerId, &str, Option<Entity>, &[(PlayerId, String)]) -> CommandResult + Send + Sync,
+{
     let mut last_ping = std::time::Instant::now();
     let ping_interval = Duration::from_secs(30);
 
@@ -267,7 +276,7 @@ async fn game_loop(
         };
 
         // Process packet
-        let result = process_packet(packet, player_id, username, world, entities, registry, settings, connections).await;
+        let result = process_packet(stream, packet, player_id, username, world, entities, registry, settings, connections, execute_command).await;
 
         match result {
             Ok(should_continue) => {
@@ -300,7 +309,8 @@ async fn game_loop(
 }
 
 /// Processes received packet
-async fn process_packet(
+async fn process_packet<F>(
+    stream: &mut TcpStream,
     packet: Packet,
     player_id: PlayerId,
     username: &str,
@@ -309,7 +319,11 @@ async fn process_packet(
     registry: &SharedVoxelRegistry,
     settings: &ServerSettings,
     connections: &ConnectionManager,
-) -> Result<bool, DisconnectReason> {
+    execute_command: &F,
+) -> Result<bool, DisconnectReason>
+where
+    F: Fn(&str, PlayerId, &str, Option<Entity>, &[(PlayerId, String)]) -> CommandResult + Send + Sync,
+{
     if !packet.is_valid() {
         error!("[Handler] Invalid packet from '{}'", username);
         return Ok(false);
@@ -373,7 +387,33 @@ async fn process_packet(
             // TODO: Implement chat broadcasting
         }
 
-        PacketPayload::Pong(pong) => {
+        PacketPayload::CommandRequest(req) => {
+            // Execute command and send response
+            info!("[Command] '{}' executed: {}", username, req.command);
+
+            let player = connections.get_player(player_id);
+            let entity = player.as_ref().and_then(|p| p.entity);
+
+            // Get all players as (PlayerId, String) pairs
+            let players_list: Vec<(PlayerId, String)> = connections.get_all_players()
+                .iter()
+                .map(|p| (p.player_id, p.username.clone()))
+                .collect();
+
+            let result = execute_command(&req.command, player_id, username, entity, &players_list);
+
+            let response = Packet::new(PacketPayload::CommandResponse(CommandResponsePacket {
+                success: result.is_success(),
+                message: result.get_message().cloned().unwrap_or_else(|| ChatMessage::text("")),
+            }));
+
+            if let Err(e) = send_packet(stream, &response).await {
+                error!("[Handler] Failed to send command response: {}", e);
+                return Err(DisconnectReason::Error);
+            }
+        }
+
+        PacketPayload::Pong(_pong) => {
             // Received pong response
         }
 

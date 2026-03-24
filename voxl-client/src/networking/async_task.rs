@@ -51,6 +51,8 @@ pub enum NetworkEvent {
     Chat(ChatBroadcastPacket),
     /// Kicked from server
     Kicked(KickedPacket),
+    /// Command response from server
+    CommandResponse(CommandResponsePacket),
 }
 
 /// Commands sent from main thread to network thread
@@ -69,6 +71,8 @@ pub enum NetworkCommand {
     SendPlayerUpdate(PlayerUpdatePacket),
     /// Send block action
     SendBlockAction(BlockActionPacket),
+    /// Send command request
+    SendCommandRequest(CommandRequestPacket),
 }
 
 /// Background networking task
@@ -154,6 +158,14 @@ impl NetworkTask {
                                 let packet = Packet::new(PacketPayload::BlockAction(action));
                                 if send_packet(s, &packet).await.is_err() {
                                     debug!("[NetworkTask] Failed to send block action");
+                                }
+                            }
+                        }
+                        NetworkCommand::SendCommandRequest(request) => {
+                            if let Some(s) = &mut stream {
+                                let packet = Packet::new(PacketPayload::CommandRequest(request));
+                                if send_packet(s, &packet).await.is_err() {
+                                    debug!("[NetworkTask] Failed to send command request");
                                 }
                             }
                         }
@@ -277,6 +289,9 @@ impl NetworkTask {
             PacketPayload::Kicked(kicked) => {
                 Some(NetworkEvent::Kicked(kicked))
             }
+            PacketPayload::CommandResponse(response) => {
+                Some(NetworkEvent::CommandResponse(response))
+            }
             PacketPayload::Disconnect(disconn) => {
                 Some(NetworkEvent::Disconnected {
                     reason: disconn.reason,
@@ -322,6 +337,20 @@ impl NetworkTask {
     /// Send block action (non-blocking, drops packet if channel is full)
     pub fn try_send_block_action(&self, action: BlockActionPacket) {
         let _ = self.command_tx.try_send(NetworkCommand::SendBlockAction(action));
+    }
+
+    /// Send command request (async, will block if channel is full)
+    pub async fn send_command(&self, command: String) {
+        let _ = self.command_tx.send(NetworkCommand::SendCommandRequest(CommandRequestPacket {
+            command,
+        })).await;
+    }
+
+    /// Send command request (non-blocking, drops packet if channel is full)
+    pub fn try_send_command(&self, command: String) {
+        let _ = self.command_tx.try_send(NetworkCommand::SendCommandRequest(CommandRequestPacket {
+            command,
+        }));
     }
 
     /// Try to receive an event (non-blocking)

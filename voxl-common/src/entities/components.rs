@@ -234,6 +234,9 @@ impl LookDirection {
         self.yaw -= dx * sensitivity;
         self.pitch -= dy * sensitivity;
         self.pitch = self.pitch.clamp(pitch_limits.0, pitch_limits.1);
+        // Normalize yaw to 0..2PI range to prevent infinite growth
+        const TWO_PI: f32 = 2.0 * std::f32::consts::PI;
+        self.yaw = self.yaw.rem_euclid(TWO_PI);
     }
 }
 
@@ -302,7 +305,7 @@ impl Default for PhysicsAffected {
 #[derive(Debug, Clone, Copy)]
 pub struct AABB {
     /// Half-dimensions (radius) from center
-    /// For a player: (0.3, 0.9, 0.3) = width 0.6, height 1.8
+    /// For a player: (0.45, 0.9, 0.45) = width 0.9, height 1.8, depth 0.9
     pub half_size: Vec3,
 }
 
@@ -310,7 +313,7 @@ impl AABB {
     /// Creates an AABB for a player (standard Minecraft size)
     pub fn player_size() -> Self {
         Self {
-            half_size: Vec3::new(0.3, 0.9, 0.3),
+            half_size: Vec3::new(0.45, 0.9, 0.45), // Width: 0.9, Height: 1.8, Depth: 0.9
         }
     }
 

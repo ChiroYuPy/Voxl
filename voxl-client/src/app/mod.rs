@@ -3,6 +3,7 @@ use crate::raycast::{Ray, RAYCAST_DISTANCE, Raycast};
 use crate::input::{InputManager, GameAction, KeyBindings};
 use voxl_common::voxel::GlobalVoxelId;
 use voxl_common::entities::GameMode;
+use voxl_common::chat::{ChatMessage, ChatComponent, ChatColor};
 use crate::debug::commands::{execute_command, CommandResult};
 use crate::client_systems::{player_input_system, player_physics_system, jump_system};
 use voxl_common::config::GameConfig;
@@ -285,56 +286,97 @@ impl App {
 
     fn handle_chat_command(&mut self, command: String) {
         let wgpu_state = if let Some(s) = &mut self.wgpu_state { s } else { return };
-        let current_pos = wgpu_state.camera().position;
 
-        let result = execute_command(&command, current_pos.into());
+        // In embedded mode, execute commands locally (single player)
+        // In remote mode, send to server
+        if self.server_integration.game_state.is_embedded_mode() {
+            // Execute locally
+            let current_pos = wgpu_state.camera().position;
+            let result = execute_command(&command, current_pos.into());
 
-        match result {
-            CommandResult::Success(msg) => {
-                wgpu_state.add_chat_message(msg, false);
-            }
-            CommandResult::Error(msg) => {
-                wgpu_state.add_chat_message(format!("§cErreur: {}", msg), false);
-            }
-            CommandResult::Teleport(pos) => {
-                wgpu_state.teleport_player(pos);
-                wgpu_state.add_chat_message(format!("§aTéléporté vers ({:.1}, {:.1}, {:.1})", pos.x, pos.y, pos.z), false);
-            }
-            CommandResult::TeleportRelative(pos) => {
-                wgpu_state.teleport_player_relative(pos);
-                wgpu_state.add_chat_message(format!("§aTéléporté relativement vers ({:.1}, {:.1}, {:.1})", pos.x, pos.y, pos.z), false);
-            }
-            CommandResult::None => {}
-            CommandResult::ClearChat => {
-                wgpu_state.clear_chat();
-                wgpu_state.add_chat_message("Chat effacé".to_string(), false);
-            }
-            CommandResult::SetGameMode(mode) => {
-                wgpu_state.set_game_mode(mode);
-                let mode_name = mode.name();
-                wgpu_state.add_chat_message(format!("§aMode de jeu changé: {}", mode_name), false);
-
-                // Message spécial si on passe en spectateur
-                if matches!(mode, GameMode::Spectator) {
-                    wgpu_state.add_chat_message("§7Mode spectateur: vol activé, collisions désactivées".to_string(), false);
+            match result {
+                CommandResult::Success(msg) => {
+                    // msg is already a ChatMessage, just add it directly
+                    wgpu_state.add_chat_message(msg);
                 }
-            }
-            CommandResult::ToggleFly => {
-                if let Some(current_mode) = wgpu_state.get_game_mode() {
-                    match current_mode {
-                        GameMode::Spectator => {
-                            wgpu_state.add_chat_message("§cImpossible de toggle le fly en mode spectateur!".to_string(), false);
-                        }
-                        GameMode::Creative { .. } => {
-                            wgpu_state.toggle_fly();
-                            let new_mode = wgpu_state.get_game_mode().unwrap();
-                            let fly_status = if new_mode.is_flying() { "activé" } else { "désactivé" };
-                            wgpu_state.add_chat_message(format!("§aMode vol {}", fly_status), false);
+                CommandResult::Error(msg) => {
+                    // msg is already a ChatMessage, add it directly
+                    wgpu_state.add_chat_message(msg);
+                }
+                CommandResult::Teleport(pos) => {
+                    wgpu_state.teleport_player(pos);
+                    wgpu_state.add_chat_message(ChatMessage::multiple(vec![
+                        ChatComponent::text("Teleported to (").color(ChatColor::Green),
+                        ChatComponent::text(&format!("{:.1}, ", pos.x)).color(ChatColor::White),
+                        ChatComponent::text(&format!("{:.1}, ", pos.y)).color(ChatColor::White),
+                        ChatComponent::text(&format!("{:.1})", pos.z)).color(ChatColor::White),
+                    ]));
+                }
+                CommandResult::TeleportRelative(pos) => {
+                    wgpu_state.teleport_player_relative(pos);
+                    wgpu_state.add_chat_message(ChatMessage::multiple(vec![
+                        ChatComponent::text("Teleported relatively to (").color(ChatColor::Green),
+                        ChatComponent::text(&format!("{:.1}, ", pos.x)).color(ChatColor::White),
+                        ChatComponent::text(&format!("{:.1}, ", pos.y)).color(ChatColor::White),
+                        ChatComponent::text(&format!("{:.1})", pos.z)).color(ChatColor::White),
+                    ]));
+                }
+                CommandResult::None => {}
+                CommandResult::ClearChat => {
+                    wgpu_state.clear_chat();
+                    wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Chat cleared").color(ChatColor::Yellow)));
+                }
+                CommandResult::SetGameMode(mode) => {
+                    wgpu_state.set_game_mode(mode);
+                    let mode_name = mode.name();
+                    wgpu_state.add_chat_message(ChatMessage::multiple(vec![
+                        ChatComponent::text("Game mode set to ").color(ChatColor::Green),
+                        ChatComponent::text(mode_name).color(ChatColor::Gold),
+                    ]));
+
+                    if matches!(mode, GameMode::Spectator) {
+                        wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Spectator mode: flying enabled, collisions disabled").color(ChatColor::Gray)));
+                    }
+                }
+                CommandResult::ToggleFly => {
+                    if let Some(current_mode) = wgpu_state.get_game_mode() {
+                        match current_mode {
+                            GameMode::Spectator => {
+                                wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Cannot toggle fly in spectator mode!").color(ChatColor::Red)));
+                            }
+                            GameMode::Creative { .. } => {
+                                wgpu_state.toggle_fly();
+                                let new_mode = wgpu_state.get_game_mode().unwrap();
+                                let (status, color) = if new_mode.is_flying() {
+                                    ("enabled", ChatColor::Green)
+                                } else {
+                                    ("disabled", ChatColor::Yellow)
+                                };
+                                wgpu_state.add_chat_message(ChatMessage::multiple(vec![
+                                    ChatComponent::text("Fly mode ").color(ChatColor::White),
+                                    ChatComponent::text(status).color(color),
+                                ]));
+                            }
                         }
                     }
                 }
             }
+            return;
         }
+
+        // Remote server mode: send command to server for execution
+        if self.server_integration.is_connected() {
+            if let Err(e) = self.server_integration.send_command(command.clone()) {
+                wgpu_state.add_chat_message(ChatMessage::multiple(vec![
+                    ChatComponent::text("Failed to send command: ").color(ChatColor::Red),
+                    ChatComponent::text(&e).color(ChatColor::White),
+                ]));
+            }
+            return;
+        }
+
+        // Not connected - show error
+        wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Not connected to server").color(ChatColor::Red)));
     }
 
     fn update_block_highlight(&mut self) {
@@ -656,6 +698,26 @@ impl ApplicationHandler for App {
 
                 self.server_integration.process_network_events(&world, &entities);
 
+                // Process command responses from server
+                for response in self.server_integration.drain_command_responses() {
+                    if response.success {
+                        wgpu_state.add_chat_message(response.message.clone());
+                    } else {
+                        // Prepend "Error: " in red to error messages
+                        wgpu_state.add_chat_message(ChatMessage::multiple(vec![
+                            ChatComponent::text("Error: ").color(ChatColor::Red),
+                            // Clone the response message
+                            match response.message.clone() {
+                                ChatMessage::Single(comp) => ChatComponent::text(&comp.get_text()).color(ChatColor::White),
+                                ChatMessage::Multiple(comps) => {
+                                    // For multi-component messages, just show plain text for now
+                                    ChatComponent::text(&response.message.plain_text()).color(ChatColor::White)
+                                }
+                            },
+                        ]));
+                    }
+                }
+
                 // Request meshes for chunks loaded from server
                 let chunks_to_mesh = self.server_integration.chunk_tracker.get_chunks_to_mesh(50);
                 if !chunks_to_mesh.is_empty() {
@@ -712,6 +774,9 @@ impl ApplicationHandler for App {
 
                     // Synchroniser la caméra avec la position du joueur
                     wgpu_state.update_camera_from_player();
+
+                    // Update camera view distance smoothing
+                    wgpu_state.camera_mut().update_view_distance(delta_time);
 
                     // Send player update to server (if connected)
                     let entity_world = wgpu_state.entity_world();
@@ -864,13 +929,18 @@ impl ApplicationHandler for App {
                         if let Some(current_mode) = state.get_game_mode() {
                             match current_mode {
                                 GameMode::Spectator => {
-                                    state.add_chat_message("§cImpossible de toggle le fly en mode spectateur!".to_string(), false);
+                                    state.add_chat_message(ChatMessage::Single(
+                                        ChatComponent::text("Impossible de toggle le fly en mode spectateur!").color(ChatColor::Red)
+                                    ));
                                 }
                                 GameMode::Creative { .. } => {
                                     state.toggle_fly();
                                     let new_mode = state.get_game_mode().unwrap();
-                                    let fly_status = if new_mode.is_flying() { "activé" } else { "désactivé" };
-                                    state.add_chat_message(format!("§aMode vol {}", fly_status), false);
+                                    let (status, color) = if new_mode.is_flying() { ("activé", ChatColor::Green) } else { ("désactivé", ChatColor::Yellow) };
+                                    state.add_chat_message(ChatMessage::multiple(vec![
+                                        ChatComponent::text("Mode vol ").color(ChatColor::White),
+                                        ChatComponent::text(status).color(color),
+                                    ]));
                                 }
                             }
                         }
@@ -898,6 +968,20 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Cycle camera view (F5)
+                if self.input.state().just_pressed(GameAction::CycleCameraView) {
+                    if let Some(state) = &mut self.wgpu_state {
+                        state.camera_mut().cycle_view_mode();
+                    }
+                }
+
+                // Toggle entity AABB (F8)
+                if self.input.state().just_pressed(GameAction::ToggleEntityAabb) {
+                    if let Some(state) = &mut self.wgpu_state {
+                        state.toggle_entity_aabb();
+                    }
+                }
+
                 // Cycle gamemode (G ou molette)
                 if self.input.state().just_pressed(GameAction::CycleGameMode) {
                     if let Some(state) = &mut self.wgpu_state {
@@ -912,9 +996,14 @@ impl ApplicationHandler for App {
                         };
                         state.set_game_mode(new_mode);
                         let mode_name = new_mode.name();
-                        state.add_chat_message(format!("§aMode de jeu changé: {}", mode_name), false);
+                        state.add_chat_message(ChatMessage::multiple(vec![
+                            ChatComponent::text("Mode de jeu changé: ").color(ChatColor::Green),
+                            ChatComponent::text(mode_name).color(ChatColor::Yellow),
+                        ]));
                         if matches!(new_mode, GameMode::Spectator) {
-                            state.add_chat_message("§7Mode spectateur: vol activé, collisions désactivées".to_string(), false);
+                            state.add_chat_message(ChatMessage::Single(
+                                ChatComponent::text("Mode spectateur: vol activé, collisions désactivées").color(ChatColor::Gray)
+                            ));
                         }
                     }
                 }

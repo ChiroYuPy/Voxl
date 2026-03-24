@@ -4,15 +4,17 @@
 
 use voxl_common::{
     VoxelWorld, SharedVoxelRegistry, WorldGenerator,
-    ServerSettings, CHUNK_SIZE,
+    ServerSettings, CHUNK_SIZE, PlayerId,
     entities::EntityWorld,
 };
 use tracing::{info, warn, error};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
+use hecs::Entity;
 
 use crate::connection::ConnectionManager;
+use crate::dispatcher::CommandDispatcher;
 
 /// Server instance managing world, entities, and connections
 pub struct Server {
@@ -210,12 +212,38 @@ impl Server {
                             let settings = self.settings.clone();
                             let connections = self.connections.clone();
 
+                            // Create command dispatcher for this connection
+                            let dispatcher = CommandDispatcher::with_defaults();
+                            let world_c = world.clone();
+                            let entities_c = entities.clone();
+                            let registry_c = registry.clone();
+                            let settings_c = settings.clone();
+
+                            let execute_command = move |command: &str,
+                                                        player_id: PlayerId,
+                                                        username: &str,
+                                                        entity: Option<Entity>,
+                                                        players: &[(PlayerId, String)]| {
+                                dispatcher.dispatch(
+                                    command,
+                                    player_id,
+                                    username,
+                                    entity,
+                                    &world_c,
+                                    &entities_c,
+                                    &registry_c,
+                                    &settings_c,
+                                    players,
+                                )
+                            };
+
                             // Spawn connection handler
                             tokio::spawn(async move {
                                 crate::connection::handle_connection(
                                     stream, addr,
                                     world, entities, registry, settings,
                                     connections,
+                                    execute_command,
                                 ).await;
                             });
                         }

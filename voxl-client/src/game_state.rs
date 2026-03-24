@@ -71,8 +71,9 @@ impl GameState {
         match mode {
             ServerMode::Embedded => {
                 // Start embedded server with shared registry
+                // Use port 0 to auto-assign an available port
                 let settings = voxl_common::ServerSettings {
-                    port,
+                    port: 0,  // Auto-assign available port
                     ..Default::default()
                 };
 
@@ -82,8 +83,16 @@ impl GameState {
 
                 match EmbeddedServer::start_with_registry(settings, registry) {
                     Ok(server) => {
+                        let actual_port = server.actual_port;
                         self.embedded_server = Some(server);
-                        info!("[GameState] Embedded server started");
+                        info!("[GameState] Embedded server started on port {}", actual_port);
+
+                        // Give the server thread time to start listening before connecting
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                        // Connect to embedded server (localhost) using actual port
+                        let server_addr = format!("127.0.0.1:{}", actual_port);
+                        self.connect_to_server_async(&server_addr, username).await;
                     }
                     Err(e) => {
                         let msg = format!("Failed to start embedded server: {}", e);
@@ -92,13 +101,6 @@ impl GameState {
                         return Err(msg);
                     }
                 }
-
-                // Give the server thread time to start listening before connecting
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                // Connect to embedded server (localhost)
-                let server_addr = format!("127.0.0.1:{}", port);
-                self.connect_to_server_async(&server_addr, username).await;
             }
             ServerMode::Remote => {
                 // Connect to remote server
@@ -226,6 +228,20 @@ impl GameState {
         }
     }
 
+    /// Sends command to server (non-blocking)
+    pub fn send_command(&mut self, command: String) -> Result<(), String> {
+        if !self.is_connected() {
+            return Err("Not connected to server".to_string());
+        }
+
+        if let Some(task) = &self.network_task {
+            task.try_send_command(command);
+            Ok(())
+        } else {
+            Err("Network task not running".to_string())
+        }
+    }
+
     /// Requests chunks from server (deprecated - chunks are auto-sent)
     #[deprecated(note = "Server now auto-sends chunks")]
     pub async fn request_chunks(&mut self, _chunks: Vec<(i32, i32, i32)>) -> Result<(), String> {
@@ -242,6 +258,11 @@ impl GameState {
     /// Returns true if connected to server
     pub fn is_connected(&self) -> bool {
         self.connection_state == ConnectionState::Connected
+    }
+
+    /// Returns true if running in embedded mode (single player)
+    pub fn is_embedded_mode(&self) -> bool {
+        self.embedded_server.is_some()
     }
 
     /// Returns the current connection state

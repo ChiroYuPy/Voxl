@@ -58,6 +58,8 @@ pub enum GameAction {
     ToggleChunkBorders,
 
     OpenSettings,
+    CycleCameraView,
+    ToggleEntityAabb,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -193,6 +195,16 @@ impl Default for KeyBindings {
             InputButton::named(NamedKey::F4),
         ]);
 
+        // Cycle camera view avec F5
+        bindings.insert(GameAction::CycleCameraView, vec![
+            InputButton::named(NamedKey::F5),
+        ]);
+
+        // Toggle entity AABB avec F8
+        bindings.insert(GameAction::ToggleEntityAabb, vec![
+            InputButton::named(NamedKey::F8),
+        ]);
+
         Self { bindings }
     }
 }
@@ -250,6 +262,7 @@ impl KeyBindings {
                 "F5" => Some(Key::Named(NamedKey::F5)),
                 "F6" => Some(Key::Named(NamedKey::F6)),
                 "F7" => Some(Key::Named(NamedKey::F7)),
+                "F8" => Some(Key::Named(NamedKey::F8)),
                 _ => None,
             }
         } else {
@@ -322,6 +335,8 @@ impl KeyBindings {
                 "CycleGameMode" => GameAction::CycleGameMode,
                 "ToggleChunkBorders" => GameAction::ToggleChunkBorders,
                 "OpenSettings" => GameAction::OpenSettings,
+                "CycleCameraView" => GameAction::CycleCameraView,
+                "ToggleEntityAabb" => GameAction::ToggleEntityAabb,
                 _ => continue,
             };
 
@@ -372,6 +387,8 @@ impl KeyBindings {
                 "CycleGameMode" => GameAction::CycleGameMode,
                 "ToggleChunkBorders" => GameAction::ToggleChunkBorders,
                 "OpenSettings" => GameAction::OpenSettings,
+                "CycleCameraView" => GameAction::CycleCameraView,
+                "ToggleEntityAabb" => GameAction::ToggleEntityAabb,
                 _ => continue,
             };
 
@@ -584,7 +601,7 @@ impl InputManager {
     }
 }
 
-const ALL_ACTIONS: [GameAction; 26] = [
+const ALL_ACTIONS: [GameAction; 28] = [
     GameAction::MoveForward,
     GameAction::MoveBackward,
     GameAction::MoveLeft,
@@ -611,4 +628,6 @@ const ALL_ACTIONS: [GameAction; 26] = [
     GameAction::CycleGameMode,
     GameAction::ToggleChunkBorders,
     GameAction::OpenSettings,
+    GameAction::CycleCameraView,
+    GameAction::ToggleEntityAabb,
 ];

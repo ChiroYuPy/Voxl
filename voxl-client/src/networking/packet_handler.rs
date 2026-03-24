@@ -81,6 +81,12 @@ pub fn handle_packet(
             // TODO: Add to chat log
         }
 
+        PacketPayload::CommandResponse(response) => {
+            // Command response from server
+            info!("[Command] Server response: success={}, message={}", response.success, response.message);
+            // TODO: Pass response to app layer
+        }
+
         _ => {
             warn!("[Network] Received unhandled packet type: {:?}", packet.header.packet_type);
         }

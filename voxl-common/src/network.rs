@@ -8,6 +8,9 @@
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
+// Re-export chat types for convenience
+pub use crate::chat::{ChatMessage, ChatComponent};
+
 /// Maximum number of blocks that can be placed/broken in one packet
 pub const MAX_BLOCK_CHANGES_PER_PACKET: usize = 64;
 
@@ -97,6 +100,11 @@ pub enum PacketType {
     Ping = 17,
     /// Client → Server: Pong response
     Pong = 18,
+
+    /// Client → Server: Command execution request
+    CommandRequest = 19,
+    /// Server → Client: Command execution response
+    CommandResponse = 20,
 }
 
 /// Complete network packet with header and payload
@@ -136,6 +144,9 @@ pub enum PacketPayload {
 
     Ping(PingPacket),
     Pong(PongPacket),
+
+    CommandRequest(CommandRequestPacket),
+    CommandResponse(CommandResponsePacket),
 }
 
 // ============================================================================
@@ -307,7 +318,8 @@ pub struct ChatMessagePacket {
 pub struct ChatBroadcastPacket {
     pub player_id: PlayerId,
     pub username: String,
-    pub message: String,
+    /// The chat message (JSON-serialized ChatMessage)
+    pub message: ChatMessage,
 }
 
 /// Ping: Server → Client
@@ -320,6 +332,22 @@ pub struct PingPacket {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PongPacket {
     pub timestamp: u64,
+}
+
+/// Command Request: Client → Server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandRequestPacket {
+    /// The raw command string (e.g., "/tp 100 64 200")
+    pub command: String,
+}
+
+/// Command Response: Server → Client
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandResponsePacket {
+    /// Whether the command succeeded
+    pub success: bool,
+    /// The response message to display (JSON-serialized ChatMessage)
+    pub message: ChatMessage,
 }
 
 // ============================================================================
@@ -349,6 +377,8 @@ impl Packet {
             PacketPayload::ChatBroadcast(_) => PacketType::ChatBroadcast,
             PacketPayload::Ping(_) => PacketType::Ping,
             PacketPayload::Pong(_) => PacketType::Pong,
+            PacketPayload::CommandRequest(_) => PacketType::CommandRequest,
+            PacketPayload::CommandResponse(_) => PacketType::CommandResponse,
         };
 
         Self {

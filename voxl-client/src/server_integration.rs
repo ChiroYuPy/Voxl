@@ -5,13 +5,22 @@
 use voxl_common::{
     VoxelWorld, network::*,
     entities::EntityWorld,
+    ChatMessage,
 };
 use crate::game_state::GameState;
 use crate::server_chunk_tracker::ChunkTracker;
 use crate::networking::async_task::NetworkEvent;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::collections::VecDeque;
 use tracing::{info, warn, error, debug};
+
+/// Command response waiting to be processed by the UI
+#[derive(Debug, Clone)]
+pub struct PendingCommandResponse {
+    pub success: bool,
+    pub message: ChatMessage,
+}
 
 /// Processes a packet received from the server
 pub fn process_server_packet(
@@ -120,6 +129,8 @@ pub struct ServerIntegration {
     pub game_state: GameState,
     /// Chunk tracker
     pub chunk_tracker: Arc<ChunkTracker>,
+    /// Pending command responses from server
+    pending_responses: VecDeque<PendingCommandResponse>,
 }
 
 impl ServerIntegration {
@@ -128,6 +139,7 @@ impl ServerIntegration {
         Self {
             game_state: GameState::new(),
             chunk_tracker: Arc::new(ChunkTracker::new()),
+            pending_responses: VecDeque::new(),
         }
     }
 
@@ -223,6 +235,14 @@ impl ServerIntegration {
                 NetworkEvent::Disconnected { reason } => {
                     info!("[Server] Disconnected: {:?}", reason);
                 }
+                NetworkEvent::CommandResponse(response) => {
+                    info!("[Server] Command response: success={}, message={}", response.success, response.message);
+                    // Store response for UI to process
+                    self.pending_responses.push_back(PendingCommandResponse {
+                        success: response.success,
+                        message: response.message,
+                    });
+                }
             }
         }
     }
@@ -270,6 +290,16 @@ impl ServerIntegration {
     /// Returns true if connected to server
     pub fn is_connected(&self) -> bool {
         self.game_state.is_connected()
+    }
+
+    /// Drains all pending command responses
+    pub fn drain_command_responses(&mut self) -> Vec<PendingCommandResponse> {
+        std::mem::take(&mut self.pending_responses).into_iter().collect()
+    }
+
+    /// Sends command to server (non-blocking)
+    pub fn send_command(&mut self, command: String) -> Result<(), String> {
+        self.game_state.send_command(command)
     }
 }
 

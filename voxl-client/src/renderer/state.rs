@@ -42,12 +42,45 @@ impl ChunkBorderMode {
     }
 }
 
+/// Camera view mode
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraViewMode {
+    FirstPerson,        // Distance = 0
+    ThirdPersonRear,    // Distance = -4 (behind player)
+    ThirdPersonFront,   // Distance = +4 (in front of player)
+}
+
+impl CameraViewMode {
+    /// Get the target distance for this view mode
+    pub fn target_distance(self) -> f32 {
+        match self {
+            CameraViewMode::FirstPerson => 0.0,
+            CameraViewMode::ThirdPersonRear => -4.0,
+            CameraViewMode::ThirdPersonFront => 4.0,
+        }
+    }
+
+    /// Cycle to the next view mode
+    pub fn cycle(self) -> Self {
+        match self {
+            CameraViewMode::FirstPerson => CameraViewMode::ThirdPersonRear,
+            CameraViewMode::ThirdPersonRear => CameraViewMode::ThirdPersonFront,
+            CameraViewMode::ThirdPersonFront => CameraViewMode::FirstPerson,
+        }
+    }
+}
+
 /// Structure de caméra
 #[derive(Clone, Copy)]
 pub struct Camera {
     pub position: Vec3A,
     pub pitch: f32, // Rotation autour de X (haut/bas)
     pub yaw: f32,   // Rotation autour de Y (gauche/droite)
+
+    // Camera view system
+    view_mode: CameraViewMode,
+    view_distance: f32,      // Current distance (smoothed)
+    target_view_distance: f32, // Target distance for smoothing
 }
 
 impl Camera {
@@ -56,7 +89,62 @@ impl Camera {
             position: Vec3A::new(0.0, 80.0, 0.0),
             pitch: -0.3,
             yaw: std::f32::consts::PI / 4.0,
+            view_mode: CameraViewMode::FirstPerson,
+            view_distance: 0.0,
+            target_view_distance: 0.0,
         }
+    }
+
+    /// Cycle to the next camera view mode
+    pub fn cycle_view_mode(&mut self) {
+        self.view_mode = self.view_mode.cycle();
+        self.target_view_distance = self.view_mode.target_distance();
+    }
+
+    /// Update the view distance with smoothing (call this every frame)
+    pub fn update_view_distance(&mut self, delta_time: f32) {
+        const SMOOTHING_SPEED: f32 = 10.0; // Speed of transition
+        let diff = self.target_view_distance - self.view_distance;
+        if diff.abs() > 0.001 {
+            self.view_distance += diff * (SMOOTHING_SPEED * delta_time).min(1.0);
+        } else {
+            self.view_distance = self.target_view_distance;
+        }
+    }
+
+    /// Get the actual camera position (player position + view offset)
+    pub fn actual_position(&self) -> Vec3A {
+        if self.view_distance.abs() < 0.001 {
+            // First person - no offset
+            self.position
+        } else {
+            // Third person - offset along forward vector
+            let forward = self.forward();
+            self.position - forward * self.view_distance
+        }
+    }
+
+    /// Get the current view mode
+    pub fn view_mode(&self) -> CameraViewMode {
+        self.view_mode
+    }
+
+    /// Set the view mode directly
+    pub fn set_view_mode(&mut self, mode: CameraViewMode) {
+        self.view_mode = mode;
+        self.target_view_distance = mode.target_distance();
+    }
+
+    /// Normalize yaw to be between 0 and 2π
+    pub fn normalize_yaw(&mut self) {
+        const TWO_PI: f32 = 2.0 * std::f32::consts::PI;
+        self.yaw = self.yaw.rem_euclid(TWO_PI);
+    }
+
+    /// Set yaw with automatic normalization
+    pub fn set_yaw(&mut self, yaw: f32) {
+        self.yaw = yaw;
+        self.normalize_yaw();
     }
 
     /// Obtenir la direction avant de la caméra
@@ -86,10 +174,14 @@ impl Camera {
         let right = self.right();
         let up = right.cross(forward);
 
+        // Use actual position for camera eye (accounting for view offset)
+        let cam_pos = self.actual_position();
+
         // Matrice de vue (look-at)
+        // Look at is always towards where the player is looking (player position + forward)
         let view = Mat4::look_at_rh(
-            self.position.into(),
-            (self.position + forward).into(),
+            cam_pos.into(),
+            (self.position + forward).into(), // Look towards player's view direction
             up.into(),
         );
 
@@ -176,6 +268,9 @@ pub struct WgpuState {
     chunk_border_vertex_buffer: wgpu::Buffer,
     chunk_border_vertex_count: u32,
     chunk_border_mode: ChunkBorderMode,
+    entity_aabb_enabled: bool,
+    entity_aabb_vertex_buffer: wgpu::Buffer,
+    entity_aabb_vertex_count: u32,
     queue: wgpu::Queue,
     device: wgpu::Device,
 
@@ -625,6 +720,17 @@ impl WgpuState {
         });
         let chunk_border_vertex_count = 0u32;
 
+        // Créer le buffer de vertex pour les AABB des entités (wireframe boxes)
+        // Chaque AABB = 12 arêtes (lignes) × 2 vertices = 24 vertices par box
+        const ENTITY_AABB_INITIAL_VERTICES: usize = 10000;
+        let entity_aabb_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Entity AABB Vertex Buffer"),
+            size: (ENTITY_AABB_INITIAL_VERTICES * std::mem::size_of::<ChunkBorderVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let entity_aabb_vertex_count = 0u32;
+
         let start_time = std::time::Instant::now();
 
         // Initialize egui state
@@ -822,6 +928,9 @@ impl WgpuState {
             chunk_border_vertex_buffer,
             chunk_border_vertex_count,
             chunk_border_mode: ChunkBorderMode::Disabled,
+            entity_aabb_enabled: false,
+            entity_aabb_vertex_buffer,
+            entity_aabb_vertex_count,
             queue,
             device,
             world: world_arc,
@@ -1174,6 +1283,55 @@ impl WgpuState {
 
         // Upload to GPU
         self.queue.write_buffer(&self.chunk_border_vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+    }
+
+    /// Met à jour les vertices des AABB des entités
+    fn update_entity_aabb_vertices(&mut self) {
+        use voxl_common::entities::{Position, AABB};
+        use glam::Vec3;
+
+        const AABB_COLOR: [f32; 4] = [0.0, 1.0, 0.0, 1.0]; // Green wireframe
+
+        let mut vertices: Vec<ChunkBorderVertex> = Vec::new();
+
+        let mut add_line = |p1: Vec3, p2: Vec3| {
+            vertices.push(ChunkBorderVertex { position: [p1.x, p1.y, p1.z], color: AABB_COLOR });
+            vertices.push(ChunkBorderVertex { position: [p2.x, p2.y, p2.z], color: AABB_COLOR });
+        };
+
+        // Query all entities with Position and AABB components
+        let world = self.entity_world.world_read();
+        for (position, aabb) in world.query::<(&Position, &AABB)>().iter() {
+            let pos = position.as_vec3();
+            let half = aabb.half_size;
+
+            let min = pos - half;
+            let max = pos + half;
+
+            // Generate wireframe box (12 edges)
+            // Bottom face
+            add_line(Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z));
+            add_line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, min.y, max.z));
+            add_line(Vec3::new(max.x, min.y, max.z), Vec3::new(min.x, min.y, max.z));
+            add_line(Vec3::new(min.x, min.y, max.z), Vec3::new(min.x, min.y, min.z));
+
+            // Top face
+            add_line(Vec3::new(min.x, max.y, min.z), Vec3::new(max.x, max.y, min.z));
+            add_line(Vec3::new(max.x, max.y, min.z), Vec3::new(max.x, max.y, max.z));
+            add_line(Vec3::new(max.x, max.y, max.z), Vec3::new(min.x, max.y, max.z));
+            add_line(Vec3::new(min.x, max.y, max.z), Vec3::new(min.x, max.y, min.z));
+
+            // Vertical edges
+            add_line(Vec3::new(min.x, min.y, min.z), Vec3::new(min.x, max.y, min.z));
+            add_line(Vec3::new(max.x, min.y, min.z), Vec3::new(max.x, max.y, min.z));
+            add_line(Vec3::new(max.x, min.y, max.z), Vec3::new(max.x, max.y, max.z));
+            add_line(Vec3::new(min.x, min.y, max.z), Vec3::new(min.x, max.y, max.z));
+        }
+
+        self.entity_aabb_vertex_count = vertices.len() as u32;
+
+        // Upload to GPU
+        self.queue.write_buffer(&self.entity_aabb_vertex_buffer, 0, bytemuck::cast_slice(&vertices));
     }
 
     /// Traiter les mises à jour de chunks et meshs (appelé chaque frame)
@@ -1695,6 +1853,11 @@ impl WgpuState {
             self.update_chunk_border_vertices();
         }
 
+        // Mettre à jour les AABB des entités avant le rendu
+        if self.entity_aabb_enabled {
+            self.update_entity_aabb_vertices();
+        }
+
         let aspect_ratio = self.surface_config.width as f32 / self.surface_config.height as f32;
 
         // Frustum culling : mettre à jour les chunks visibles
@@ -1777,7 +1940,10 @@ impl WgpuState {
             self.chunk_meshes.len(),
         );
 
-        // Show chat UI and get submitted command
+        // Show chat messages (always visible, even when chat is closed)
+        self.egui_state.show_chat_messages();
+
+        // Show chat UI and get submitted command (only when chat is open)
         let was_chat_open = self.egui_state.is_chat_open();
         if let Some(command) = self.egui_state.show_chat_ui() {
             self.submitted_command = Some(command);
@@ -1869,6 +2035,14 @@ impl WgpuState {
                 render_pass.set_vertex_buffer(0, self.chunk_border_vertex_buffer.slice(..));
                 render_pass.draw(0..self.chunk_border_vertex_count, 0..1);
             }
+
+            // Rendu des AABB des entités (F8)
+            if self.entity_aabb_enabled && self.entity_aabb_vertex_count > 0 {
+                render_pass.set_pipeline(&self._chunk_border_pipeline);
+                render_pass.set_bind_group(0, &self.chunk_border_camera_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.entity_aabb_vertex_buffer.slice(..));
+                render_pass.draw(0..self.entity_aabb_vertex_count, 0..1);
+            }
         }
 
         // Render pass for crosshair (no depth, loads existing framebuffer)
@@ -1958,6 +2132,12 @@ impl WgpuState {
         debug!("[Debug] Chunk borders: {}", self.chunk_border_mode.as_str());
     }
 
+    /// Toggle l'affichage des AABB des entités (F8)
+    pub fn toggle_entity_aabb(&mut self) {
+        self.entity_aabb_enabled = !self.entity_aabb_enabled;
+        debug!("[Debug] Entity AABB: {}", self.entity_aabb_enabled);
+    }
+
     /// Obtenir une référence au monde des entités ECS
     pub fn entity_world(&self) -> &EntityWorld {
         &self.entity_world
@@ -1981,7 +2161,7 @@ impl WgpuState {
         match camera_sync_system(self.entity_world.world_read(), player_entity) {
             Some((pos, yaw, pitch)) => {
                 self.camera.position = Vec3A::new(pos.x, pos.y, pos.z);
-                self.camera.yaw = yaw;
+                self.camera.set_yaw(yaw);
                 self.camera.pitch = pitch;
                 true
             }
@@ -2126,8 +2306,13 @@ impl WgpuState {
     }
 
     /// Add message to chat
-    pub fn add_chat_message(&mut self, text: String, is_command: bool) {
-        self.egui_state.add_chat_message(text, is_command);
+    pub fn add_chat_message(&mut self, message: voxl_common::chat::ChatMessage) {
+        self.egui_state.add_chat_message(message);
+    }
+
+    /// Add simple text message to chat (legacy compatibility)
+    pub fn add_chat_text(&mut self, text: String) {
+        self.egui_state.add_chat_text(text);
     }
 
     /// Clear chat history

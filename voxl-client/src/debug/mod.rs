@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use crate::performance::PerformanceSnapshot;
 use voxl_common::voxel::VoxelFace;
+use voxl_common::chat::{ChatMessage as CommonChatMessage, ChatComponent, ChatColor};
 
 /// 3x3 grid anchor positions for debug text
 #[derive(Debug, Clone, Copy)]
@@ -218,10 +219,25 @@ fn draw_formatted_text(ctx: &Context, id: &str, text: &DebugText, anchor: TextAn
 }
 
 #[derive(Clone)]
-pub struct ChatMessage {
-    pub text: String,
-    pub is_command: bool,
+pub struct ChatEntry {
+    pub message: CommonChatMessage,
     pub timestamp: Instant,
+}
+
+impl ChatEntry {
+    fn from_text(text: String) -> Self {
+        Self {
+            message: CommonChatMessage::text(text),
+            timestamp: Instant::now(),
+        }
+    }
+
+    fn from_message(message: CommonChatMessage) -> Self {
+        Self {
+            message,
+            timestamp: Instant::now(),
+        }
+    }
 }
 
 pub struct EguiState {
@@ -236,7 +252,7 @@ pub struct EguiState {
     // Chat system
     pub chat_open: bool,
     chat_input: String,
-    chat_messages: Vec<ChatMessage>,
+    chat_messages: Vec<ChatEntry>,
     pub chat_focused: bool,
     chat_focus_requested: bool,
 
@@ -318,15 +334,77 @@ impl EguiState {
         }
     }
 
-    pub fn add_chat_message(&mut self, text: String, is_command: bool) {
-        self.chat_messages.push(ChatMessage {
-            text,
-            is_command,
-            timestamp: Instant::now(),
-        });
+    pub fn add_chat_message(&mut self, message: CommonChatMessage) {
+        self.chat_messages.push(ChatEntry::from_message(message));
         // Garder seulement les 100 derniers messages
         if self.chat_messages.len() > 100 {
             self.chat_messages.remove(0);
+        }
+    }
+
+    /// Add a simple text message (legacy compatibility)
+    pub fn add_chat_text(&mut self, text: String) {
+        self.chat_messages.push(ChatEntry::from_text(text));
+        if self.chat_messages.len() > 100 {
+            self.chat_messages.remove(0);
+        }
+    }
+
+    /// Display a chat message with colored components
+    fn show_chat_message(ui: &mut egui::Ui, message: &CommonChatMessage) {
+        use egui::{self, RichText};
+
+        // Affiche tous les composants sur une seule ligne (horizontalement)
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;  // Pas d'espace entre les composants
+
+            for component in message.components() {
+                let mut rich_text = RichText::new(&component.get_text());
+
+                // Set color
+                if let Some(color) = component.color {
+                    rich_text = rich_text.color(Self::chat_color_to_egui(color));
+                }
+
+                // Set formatting
+                if component.format.bold {
+                    rich_text = rich_text.strong();
+                }
+                if component.format.italic {
+                    rich_text = rich_text.italics();
+                }
+                if component.format.underlined {
+                    rich_text = rich_text.underline();
+                }
+                if component.format.strikethrough {
+                    rich_text = rich_text.strikethrough();
+                }
+
+                ui.label(rich_text);
+            }
+        });
+    }
+
+    /// Convert ChatColor to egui Color32
+    fn chat_color_to_egui(color: ChatColor) -> egui::Color32 {
+        match color {
+            ChatColor::Black => egui::Color32::BLACK,
+            ChatColor::DarkBlue => egui::Color32::from_rgb(0, 0, 170),
+            ChatColor::DarkGreen => egui::Color32::from_rgb(0, 170, 0),
+            ChatColor::DarkAqua => egui::Color32::from_rgb(0, 170, 170),
+            ChatColor::DarkRed => egui::Color32::from_rgb(170, 0, 0),
+            ChatColor::DarkPurple => egui::Color32::from_rgb(170, 0, 170),
+            ChatColor::Gold => egui::Color32::from_rgb(255, 170, 0),
+            ChatColor::Gray => egui::Color32::from_rgb(170, 170, 170),
+            ChatColor::DarkGray => egui::Color32::from_rgb(85, 85, 85),
+            ChatColor::Blue => egui::Color32::from_rgb(85, 85, 255),
+            ChatColor::Green => egui::Color32::from_rgb(85, 255, 85),
+            ChatColor::Aqua => egui::Color32::from_rgb(85, 255, 255),
+            ChatColor::Red => egui::Color32::from_rgb(255, 85, 85),
+            ChatColor::LightPurple => egui::Color32::from_rgb(255, 85, 255),
+            ChatColor::Yellow => egui::Color32::from_rgb(255, 255, 85),
+            ChatColor::White => egui::Color32::WHITE,
+            ChatColor::Reset => egui::Color32::WHITE,
         }
     }
 
@@ -707,7 +785,50 @@ impl EguiState {
         }
     }
 
-    /// Affiche l'interface du chat
+    /// Affiche les messages de chat (sans input) - visible tout le temps
+    pub fn show_chat_messages(&self) {
+        if self.chat_messages.is_empty() {
+            return;
+        }
+
+        let chat_messages = self.chat_messages.clone();
+
+        // Quand le chat est ouvert, on affiche plus de messages et on permet le scroll
+        let (max_height, visible_count) = if self.chat_open {
+            (300.0, 20)  // Plus grand quand chat ouvert, scrollable
+        } else {
+            (120.0, 6)   // Plus petit quand chat fermé
+        };
+
+        egui::Area::new(egui::Id::new("chat_messages_area"))
+            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -40.0])  // Au-dessus de l'input
+            .show(&self.ctx, |ui| {
+                ui.set_width(400.0);
+                ui.set_max_height(max_height);
+
+                // Zone de messages avec scroll - toujours scroller vers le bas (nouveaux messages)
+                ScrollArea::vertical()
+                    .id_source("chat_scroll")
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+
+                        // Afficher les messages du plus ancien au plus récent (haut en bas)
+                        // Prendre seulement les derniers messages visibles
+                        let start = if chat_messages.len() > visible_count {
+                            chat_messages.len() - visible_count
+                        } else {
+                            0
+                        };
+
+                        for entry in chat_messages.iter().skip(start) {
+                            Self::show_chat_message(ui, &entry.message);
+                        }
+                    });
+            });
+    }
+
+    /// Affiche l'input du chat (seulement quand le chat est ouvert)
     /// Retourne Some(command) si une commande a été exécutée, None sinon
     pub fn show_chat_ui(&mut self) -> Option<String> {
         if !self.chat_open {
@@ -722,30 +843,11 @@ impl EguiState {
             self.chat_focus_requested = false;
         }
 
-        let chat_messages = self.chat_messages.clone();
-
-        egui::Area::new(egui::Id::new("chat_area"))
+        // Position l'input en bas de l'écran
+        egui::Area::new(egui::Id::new("chat_input_area"))
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
             .show(&self.ctx, |ui| {
                 ui.set_width(400.0);
-                ui.set_max_height(250.0);
-
-                // Zone de messages avec scroll
-                ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 4.0;
-
-                        for msg in &chat_messages {
-                            if msg.is_command {
-                                ui.colored_label(egui::Rgba::from_rgb(150.0, 150.0, 255.0), &msg.text);
-                            } else {
-                                ui.label(&msg.text);
-                            }
-                        }
-                    });
-
-                ui.separator();
 
                 // Champ de saisie
                 let mut temp_input = self.chat_input.clone();
@@ -753,7 +855,7 @@ impl EguiState {
                     [400.0, 25.0],
                     TextEdit::singleline(&mut temp_input)
                         .id(egui::Id::new("chat_input"))
-                        .hint_text("Taper une commande ou un message...")
+                        .hint_text("Type a command or message...")
                         .desired_width(f32::INFINITY)
                 );
 
@@ -779,12 +881,14 @@ impl EguiState {
         if should_close {
             if !input_text.is_empty() {
                 if input_text.starts_with('/') {
-                    // C'est une commande
+                    // C'est une commande - pas d'affichage, juste exécution
                     submitted_command = Some(input_text.clone());
-                    self.add_chat_message(format!("> {}", input_text), true);
                 } else {
                     // C'est un message de chat
-                    self.add_chat_message(format!("<Player> {}", input_text), false);
+                    self.add_chat_message(CommonChatMessage::multiple(vec![
+                        ChatComponent::text("<Player> ").color(ChatColor::Gray),
+                        ChatComponent::text(&input_text).color(ChatColor::White),
+                    ]));
                 }
                 self.chat_input.clear();
             }

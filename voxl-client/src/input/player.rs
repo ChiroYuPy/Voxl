@@ -77,6 +77,7 @@ impl PlayerController {
             camera.yaw -= dx as f32 * self.config.look_sensitivity;
             camera.pitch -= dy as f32 * self.config.look_sensitivity;
             camera.pitch = camera.pitch.clamp(self.config.pitch_limits.0, self.config.pitch_limits.1);
+            camera.normalize_yaw();
         }
 
         let mut move_dir = Vec3::ZERO;
@@ -132,6 +133,7 @@ impl PlayerController {
             camera.yaw -= dx as f32 * self.config.look_sensitivity;
             camera.pitch -= dy as f32 * self.config.look_sensitivity;
             camera.pitch = camera.pitch.clamp(self.config.pitch_limits.0, self.config.pitch_limits.1);
+            camera.normalize_yaw();
         }
 
         let forward = vec3a_to_vec3(camera.forward());

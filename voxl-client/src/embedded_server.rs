@@ -21,16 +21,34 @@ pub struct EmbeddedServer {
     #[allow(dead_code)]
     server_thread: Option<thread::JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
+    /// The actual port the server is listening on (may differ from requested port)
+    pub actual_port: u16,
 }
 
 impl EmbeddedServer {
     /// Starts an embedded server in a background thread
     /// Pass a SharedVoxelRegistry to ensure client and server use the same block IDs
+    /// If port is 0, an available port will be automatically assigned
+    /// Returns the server handle with the actual port assigned
     pub fn start_with_registry(settings: voxl_common::ServerSettings, registry: SharedVoxelRegistry) -> Result<Self, Box<dyn std::error::Error>> {
         info!("[EmbeddedServer] Starting embedded server on port {}...", settings.port);
 
+        // First, bind to find an available port if port is 0
+        let actual_port = if settings.port == 0 {
+            let listener = TcpListener::bind("0.0.0.0:0")?;
+            let actual_port = listener.local_addr()?.port();
+            info!("[EmbeddedServer] Auto-assigned port: {}", actual_port);
+            actual_port
+        } else {
+            settings.port
+        };
+
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
+
+        // Update settings with actual port
+        let mut settings = settings;
+        settings.port = actual_port;
 
         let server_thread = thread::spawn(move || {
             Self::run_server(settings, shutdown_clone, registry);
@@ -39,6 +57,7 @@ impl EmbeddedServer {
         Ok(Self {
             server_thread: Some(server_thread),
             shutdown,
+            actual_port,
         })
     }
 

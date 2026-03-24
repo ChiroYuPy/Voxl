@@ -261,6 +261,8 @@ fn format_action_name(action: GameAction) -> String {
         GameAction::CycleGameMode => "Changer mode",
         GameAction::ToggleChunkBorders => "Bordures chunks",
         GameAction::OpenSettings => "Paramètres",
+        GameAction::CycleCameraView => "Vue caméra",
+        GameAction::ToggleEntityAabb => "AABB entités",
     }.to_string()
 }
 

@@ -9,6 +9,8 @@
 pub mod server;
 pub mod connection;
 pub mod player;
+pub mod dispatcher;
+pub mod commands;
 
 use server::Server;
 use tracing::info;
