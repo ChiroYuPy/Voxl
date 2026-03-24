@@ -901,8 +901,8 @@ impl WgpuState {
 
         // Créer le monde des entités ECS
         let mut entity_world = EntityWorld::new();
-        // Spawner le joueur à une position proche du niveau du terrain (Y≈70)
-        let spawn_pos = glam::Vec3::new(0.0, 60.0, 0.0);  // On terrain surface (terrain base is 50)
+        // Spawner le joueur à une position proche du niveau du terrain (Y=127)
+        let spawn_pos = glam::Vec3::new(0.0, 127.0, 0.0);  // Terrain base height
         entity_world.spawn_player(spawn_pos);
         info!("[Renderer] Player spawned at ({}, {}, {})", spawn_pos.x, spawn_pos.y, spawn_pos.z);
 
@@ -1648,16 +1648,37 @@ impl WgpuState {
 
     /// Demande le mesh pour un seul chunk (sans duplication)
     fn request_mesh_single(&mut self, cx: i32, cy: i32, cz: i32, priority: MeshPriority) {
+        // Pour les modifications de bloc (haute priorité), on ne vérifie pas les voisins
+        // car le joueur a modifié ce chunk explicitement
+        let skip_neighbor_check = priority == MeshPriority::Modified;
+
         // Vérifier que le chunk existe
-        let exists = if let Ok(world) = self.world.read() {
-            world.get_chunk_existing(cx, cy, cz).is_some()
+        let (exists, neighbors_exist) = if let Ok(world) = self.world.read() {
+            let this_exists = world.get_chunk_existing(cx, cy, cz).is_some();
+
+            // Vérifier les 6 voisins (pour un mesh correct sans faces manquantes)
+            // Seulement pour les nouveaux chunks, pas pour les modifications
+            let neighbors_exist = skip_neighbor_check || this_exists &&
+                world.get_chunk_existing(cx + 1, cy, cz).is_some() && // Est
+                world.get_chunk_existing(cx - 1, cy, cz).is_some() && // Ouest
+                world.get_chunk_existing(cx, cy + 1, cz).is_some() && // Haut
+                world.get_chunk_existing(cx, cy - 1, cz).is_some() && // Bas
+                world.get_chunk_existing(cx, cy, cz + 1).is_some() && // Sud
+                world.get_chunk_existing(cx, cy, cz - 1).is_some();   // Nord
+
+            (this_exists, neighbors_exist)
         } else {
-            false
+            (false, false)
         };
 
         if !exists {
             debug!("[Mesh] Chunk ({},{},{}) doesn't exist yet, skipping mesh request", cx, cy, cz);
-            return; // Le chunk n'existe pas encore, on ne demande pas le mesh
+            return;
+        }
+
+        if !neighbors_exist {
+            debug!("[Mesh] Chunk ({},{},{}) exists but neighbors not ready, deferring mesh", cx, cy, cz);
+            return;
         }
 
         debug!("[Mesh] Requesting mesh for chunk ({},{},{})", cx, cy, cz);
@@ -1712,7 +1733,9 @@ impl WgpuState {
 
         // Rayon de chargement (en chunks)
         const LOAD_RADIUS: i32 = 4;
-        const VERTICAL_RADIUS: i32 = 2;
+        // Couvrir toute la hauteur du monde (192 = 12 chunks verticaux)
+        // Le joueur peut être n'importe où, donc on demande tous les chunks verticaux
+        const VERTICAL_RADIUS: i32 = 12;  // WORLD_HEIGHT / CHUNK_SIZE
 
         // Collecter tous les chunks à vérifier avec leur distance au joueur
         let mut chunks_to_request: Vec<(i32, i32, i32, f32)> = Vec::new();
@@ -1883,7 +1906,18 @@ impl WgpuState {
         let (pos, chunk_x, chunk_y, chunk_z, yaw, pitch, block_count, camera_forward, target_block) = {
             let world_ref = if let Ok(w) = self.world.read() { w } else { return Ok(()) };
 
-            let pos = self.camera.position;
+            // Get player entity position (feet at center) for F3 display
+            let player_pos = if let Some(player_entity) = self.entity_world.player_entity() {
+                let entity_world = self.entity_world.world_read();
+                let mut query = entity_world.query_one::<&voxl_common::entities::Position>(player_entity);
+                query.get().ok().map(|pos| pos.as_vec3())
+            } else {
+                None
+            };
+
+            // Use player position if available, otherwise fallback to camera position
+            let pos = player_pos.unwrap_or_else(|| self.camera.position.into());
+
             let forward = self.camera.forward();
             let chunk_x = pos.x.floor() as i32 / 16;
             let chunk_y = pos.y.floor() as i32 / 16;

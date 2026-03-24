@@ -200,8 +200,8 @@ pub struct MeshQueue {
     tx: Sender<MeshRequest>,
     /// Receiver pour les résultats
     rx: Receiver<MeshResult>,
-    /// Handle du worker thread
-    _worker: Option<JoinHandle<()>>,
+    /// Handles des worker threads
+    _workers: Vec<JoinHandle<()>>,
     /// Nombre de workers
     num_workers: usize,
     /// Intensité de l'ambient occlusion pour le meshing
@@ -278,7 +278,7 @@ impl MeshQueue {
         Self {
             tx: tx_req,
             rx: rx_res,
-            _worker: Some(workers.into_iter().next().unwrap()),
+            _workers: workers,
             num_workers,
             ao_intensity,
         }

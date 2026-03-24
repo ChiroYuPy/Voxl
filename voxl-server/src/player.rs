@@ -47,8 +47,8 @@ pub fn spawn_player_entity(
 ) -> Entity {
     let mut entities = entities.write().unwrap();
 
-    // Spawn at Y=80 (above terrain)
-    let spawn_pos = Vec3::new(0.0, 80.0, 0.0);
+    // Spawn at Y=127 (terrain base height)
+    let spawn_pos = Vec3::new(0.0, 127.0, 0.0);
 
     // Create entity with all required components
     let entity = entities.ecs_world.spawn((

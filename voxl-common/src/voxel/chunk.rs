@@ -3,7 +3,7 @@ use super::GlobalVoxelId;
 pub const CHUNK_SIZE: u32 = 16;
 pub const CHUNK_VOLUME: usize = CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize;
 
-pub const WORLD_HEIGHT: u32 = 64;
+pub const WORLD_HEIGHT: u32 = 192;
 
 pub const VERTICAL_CHUNKS: u32 = (WORLD_HEIGHT + CHUNK_SIZE - 1) / CHUNK_SIZE;
 

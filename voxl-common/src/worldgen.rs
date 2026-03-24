@@ -5,26 +5,76 @@
 
 use crate::voxel::{VoxelChunk, SharedVoxelRegistry, CHUNK_SIZE, WORLD_HEIGHT, GlobalVoxelId};
 use tracing::info;
+use noise::{Perlin, Simplex, NoiseFn};
 
-/// World generator with simple heightmap-based terrain
-#[derive(Clone, Copy)]
+/// Biome types for world generation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Biome {
+    Plains,
+    Desert,
+    Mountains,
+    River,
+}
+
+/// World generator with heightmap-based terrain, caves, and biomes
+#[derive(Clone)]
 pub struct WorldGenerator {
     /// Block IDs pre-calculated for performance
     grass_id: GlobalVoxelId,
     dirt_id: GlobalVoxelId,
     stone_id: GlobalVoxelId,
     bedrock_id: GlobalVoxelId,
+    sand_id: GlobalVoxelId,
+    water_id: GlobalVoxelId,
+
+    /// Noise for terrain heightmap (base shape)
+    terrain_noise: Perlin,
+
+    /// Noise for detail (local variations)
+    detail_noise: Perlin,
+
+    /// Noise for biome selection
+    biome_noise: Perlin,
+
+    /// Noise for rivers (2D, creates river paths)
+    river_noise: Perlin,
+
+    /// 3D noise for cave generation
+    cave_noise: Simplex,
+
+    /// Seed for reproducible generation
+    seed: u32,
 }
 
 impl WorldGenerator {
-    /// Creates a new world generator
+    /// Creates a new world generator with a default seed
     pub fn new() -> Self {
+        Self::with_seed(12345)
+    }
+
+    /// Creates a new world generator with a specific seed
+    pub fn with_seed(seed: u32) -> Self {
         Self {
             grass_id: 1,
             dirt_id: 2,
             stone_id: 3,
             bedrock_id: 4,
+            sand_id: 5,
+            water_id: 6,
+
+            terrain_noise: Perlin::new(seed),
+            detail_noise: Perlin::new(seed + 1),
+            biome_noise: Perlin::new(seed + 2),
+            river_noise: Perlin::new(seed + 3),
+            cave_noise: Simplex::new(seed + 100),
+
+            seed,
         }
+    }
+
+    /// Returns the current seed
+    pub fn seed(&self) -> u32 {
+        self.seed
     }
 
     /// Initializes block IDs from the registry
@@ -33,66 +83,111 @@ impl WorldGenerator {
         self.dirt_id = registry.get_id_by_string("dirt").unwrap_or(2);
         self.stone_id = registry.get_id_by_string("stone").unwrap_or(3);
         self.bedrock_id = registry.get_id_by_string("bedrock").unwrap_or(4);
+        self.sand_id = registry.get_id_by_string("sand").unwrap_or(5);
+        self.water_id = registry.get_id_by_string("cherry_log").unwrap_or(6);
 
-        info!("[WorldGen] Initialized block IDs: grass={}, dirt={}, stone={}, bedrock={}",
-            self.grass_id, self.dirt_id, self.stone_id, self.bedrock_id);
+        info!("[WorldGen] Initialized block IDs: grass={}, dirt={}, stone={}, bedrock={}, sand={}, water={}",
+            self.grass_id, self.dirt_id, self.stone_id, self.bedrock_id, self.sand_id, self.water_id);
         info!("[WorldGen] Total blocks in registry: {}", registry.len());
+        info!("[WorldGen] Using seed: {}", self.seed);
     }
 
     /// Calculates terrain height at a given world position
-    /// Uses terraced elevation levels with moderate height variation
+    /// The detail noise participates in local height variations
     #[inline]
     pub fn terrain_height(&self, wx: i32, wz: i32) -> i32 {
-        // Base height (lower than before for more accessible terrain)
-        let base = 48.0;
+        // Main terrain noise - large scale features
+        let terrain = self.terrain_noise.get([wx as f64 * 0.01, wz as f64 * 0.01]);
 
-        // Large rolling hills - reduced amplitude for lower mountains
-        let scale_x = wx as f32 * 0.03;
-        let scale_z = wz as f32 * 0.03;
-        let large_hills = (scale_x.sin() * 3.5 + scale_z.cos() * 3.5);
+        // Detail noise - local variations (more visible now)
+        let detail = self.detail_noise.get([wx as f64 * 0.08, wz as f64 * 0.08]) * 6.0;
 
-        // Medium frequency terrain features
-        let med_scale_x = wx as f32 * 0.08;
-        let med_scale_z = wz as f32 * 0.08;
-        let med_hills = (med_scale_x.sin() * 2.0 + med_scale_z.cos() * 2.0);
+        // Base height at Y=127, with amplitude of +/- 30 from terrain
+        // Detail adds local bumps and dips
+        let height = 127.0 + (terrain * 30.0) + detail;
 
-        // Small detail noise
-        let detail_scale_x = wx as f32 * 0.2;
-        let detail_scale_z = wz as f32 * 0.2;
-        let detail = (detail_scale_x.sin() * 0.8 + detail_scale_z.cos() * 0.8);
+        // Clamp to reasonable range [70, 180]
+        height.clamp(70.0, 180.0) as i32
+    }
 
-        // Combine all variations
-        let raw_height = base + large_hills + med_hills + detail;
+    /// Gets the biome at a given world position
+    #[inline]
+    pub fn get_biome(&self, wx: i32, wz: i32) -> Biome {
+        // River noise: higher values create rivers
+        let river_val = self.river_noise.get([wx as f64 * 0.02, wz as f64 * 0.02]);
 
-        // Create terraces/levels by quantizing to 2-block steps
-        // This gives a more "layered" Minecraft-like appearance
-        let terraced = (raw_height / 2.0).floor() * 2.0;
+        // If river noise is above threshold, it's a river
+        if river_val > 0.4 {
+            return Biome::River;
+        }
 
-        // Add subtle smoothing between terraces (optional)
-        let smoothed = terraced + (raw_height % 2.0) * 0.3;
+        // Biome noise - higher frequency for smaller biomes
+        let n = self.biome_noise.get([wx as f64 * 0.02, wz as f64 * 0.02]);
 
-        // Clamp to reasonable range [38, 62] - lower than before
-        smoothed.clamp(38.0, 62.0) as i32
+        // Divide into biome zones
+        if n < -0.33 {
+            Biome::Desert
+        } else if n < 0.33 {
+            Biome::Plains
+        } else {
+            Biome::Mountains
+        }
+    }
+
+    /// Returns the surface block ID for a given biome
+    #[inline]
+    fn surface_block_for_biome(&self, biome: Biome) -> GlobalVoxelId {
+        match biome {
+            Biome::Plains => self.grass_id,
+            Biome::Desert => self.sand_id,
+            Biome::Mountains => self.stone_id,
+            Biome::River => self.dirt_id, // River bottom is dirt/sand
+        }
+    }
+
+    /// Returns the subsurface block ID for a given biome (dirt layer)
+    #[inline]
+    fn subsurface_block_for_biome(&self, biome: Biome) -> GlobalVoxelId {
+        match biome {
+            Biome::Plains => self.dirt_id,
+            Biome::Desert => self.sand_id,
+            Biome::Mountains => self.stone_id,
+            Biome::River => self.dirt_id,
+        }
+    }
+
+    /// Checks if a position should be a cave (empty space)
+    #[inline]
+    fn is_cave(&self, wx: i32, wy: i32, wz: i32) -> bool {
+        // Caves between Y=10 and Y=110 (below surface, above deep)
+        if wy > 110 || wy < 10 {
+            return false;
+        }
+
+        let n = self.cave_noise.get([wx as f64 * 0.05, wy as f64 * 0.05, wz as f64 * 0.05]);
+        n > 0.5
+    }
+
+    /// Checks if a position is near the surface
+    #[inline]
+    fn is_near_surface(&self, _wx: i32, wy: i32, _wz: i32, surface_height: i32) -> bool {
+        (surface_height - wy) < 5
     }
 
     /// Generates a complete chunk with detailed logging
-    ///
-    /// Returns statistics about the generation:
-    /// - number of blocks placed
-    /// - time taken in nanoseconds
     pub fn generate_chunk_logged(&self, chunk: &mut VoxelChunk, _registry: &SharedVoxelRegistry,
                                    cx: i32, cy: i32, cz: i32) -> ChunkGenStats {
         let start = std::time::Instant::now();
 
         let base_y = cy * CHUNK_SIZE as i32;
 
-        // Early exit conditions
         if base_y > WORLD_HEIGHT as i32 {
             return ChunkGenStats::empty(start.elapsed());
         }
 
-        // Pre-calculate heights for the entire chunk (16x16 = 256 values)
+        // Pre-calculate heights and biomes for the entire chunk
         let mut heights = [[0i32; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
+        let mut biomes = [[Biome::Plains; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
         let mut max_h = 0i32;
 
         let wx_base = cx * CHUNK_SIZE as i32;
@@ -103,56 +198,71 @@ impl WorldGenerator {
                 let wx = wx_base + x as i32;
                 let wz = wz_base + z as i32;
                 let h = self.terrain_height(wx, wz);
+                let biome = self.get_biome(wx, wz);
                 heights[z][x] = h;
+                biomes[z][x] = biome;
                 if h > max_h {
                     max_h = h;
                 }
             }
         }
 
-        // If chunk is entirely above terrain, nothing to do
-        if base_y > max_h {
+        // Water level (below normal terrain height)
+        let water_level = 100;
+
+        if base_y > max_h && base_y > water_level {
             return ChunkGenStats::empty(start.elapsed());
         }
 
-        // Generate terrain
         let mut blocks_placed = 0u32;
 
         for z in 0..CHUNK_SIZE as usize {
             for x in 0..CHUNK_SIZE as usize {
+                let wx = wx_base + x as i32;
+                let wz = wz_base + z as i32;
                 let h = heights[z][x];
+                let biome = biomes[z][x];
 
-                // If height is below chunk, skip
-                if h < base_y {
+                // Skip if below chunk and not in water area
+                if h < base_y && base_y > water_level {
                     continue;
                 }
 
                 for y in 0..CHUNK_SIZE as usize {
                     let gy = base_y + y as i32;
 
-                    // If above terrain height, skip
-                    if gy > h {
+                    // Above terrain and above water level = air
+                    if gy > h && gy > water_level {
                         continue;
                     }
 
-                    // Bedrock at Y=0 (layer 0 exactly)
+                    // Bedrock at Y=0
                     if gy == 0 {
                         chunk.set(x as u32, y as u32, z as u32, Some(self.bedrock_id));
                         blocks_placed += 1;
                         continue;
                     }
 
-                    // Determine block based on position relative to surface
-                    // gy == h: surface (grass)
-                    // h-1 >= gy >= h-3: dirt (3 layers below surface)
-                    // gy < h-3: stone
+                    // Check for caves
+                    if gy > 0 && !self.is_near_surface(wx, gy, wz, h) {
+                        if self.is_cave(wx, gy, wz) {
+                            continue;
+                        }
+                    }
+
+                    // Water: fill below water_level and above terrain
+                    if gy > h && gy <= water_level {
+                        chunk.set(x as u32, y as u32, z as u32, Some(self.water_id));
+                        blocks_placed += 1;
+                        continue;
+                    }
+
+                    // Below terrain - place solid blocks
                     let block_id = if gy == h {
-                        self.grass_id  // Surface = grass
+                        self.surface_block_for_biome(biome)
                     } else if gy > h - 4 {
-                        // 3 layers below surface: h-1, h-2, h-3
-                        self.dirt_id
+                        self.subsurface_block_for_biome(biome)
                     } else {
-                        // Everything else: stone
                         self.stone_id
                     };
 
