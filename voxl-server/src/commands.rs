@@ -1,21 +1,12 @@
-//! Built-in server commands
-//!
-//! Commands are executed server-side. The client sends raw command strings
-//! and receives responses with rich formatting.
-
 use voxl_common::{
     Command, CommandContext, CommandResult, TabCompleteSuggestion,
-    chat::{ChatMessage, ChatComponent, ChatColor},
+    chat::{ChatMessage, ChatComponent},
     entities::{GameMode, PlayerControlled, Position},
+    network::ClientAction,
     args,
 };
 use glam::Vec3;
 
-// ============================================================================
-// Built-in Commands
-// ============================================================================
-
-/// Displays help for all commands
 pub struct HelpCommand;
 
 impl Command for HelpCommand {
@@ -28,29 +19,28 @@ impl Command for HelpCommand {
     }
 
     fn execute(&self, _args: &[&str], _ctx: &CommandContext) -> CommandResult {
-        // Build a rich chat message with multiple components
-        let components = vec![
-            ChatComponent::text("Available commands:\n").color(ChatColor::Gold).bold(),
-            ChatComponent::text("/help").color(ChatColor::Yellow),
-            ChatComponent::text(" - Shows this help message\n").color(ChatColor::White),
-            ChatComponent::text("/tp <x> <y> <z>").color(ChatColor::Yellow),
-            ChatComponent::text(" - Teleport to coordinates\n").color(ChatColor::White),
-            ChatComponent::text("/tp ~<x> ~<y> ~<z>").color(ChatColor::Yellow),
-            ChatComponent::text(" - Teleport relatively\n").color(ChatColor::White),
-            ChatComponent::text("/pos").color(ChatColor::Yellow),
-            ChatComponent::text(" - Show your position\n").color(ChatColor::White),
-            ChatComponent::text("/gamemode <creative|spectator>").color(ChatColor::Yellow),
-            ChatComponent::text(" - Change game mode\n").color(ChatColor::White),
-            ChatComponent::text("/gm <c|s>").color(ChatColor::Yellow),
-            ChatComponent::text(" - Game mode shortcut\n").color(ChatColor::White),
-            ChatComponent::text("/fly").color(ChatColor::Yellow),
-            ChatComponent::text(" - Toggle fly mode (creative only)").color(ChatColor::White),
-        ];
-        CommandResult::Success(ChatMessage::multiple(components))
+        CommandResult::Success(ChatMessage {
+            components: vec![
+                ChatComponent::text("Available commands:\n").color("#FFAA00"),
+                ChatComponent::text("/help").color("#FFFF55"),
+                ChatComponent::text(" - Shows this help message\n").color("#FFFFFF"),
+                ChatComponent::text("/tp <x> <y> <z>").color("#FFFF55"),
+                ChatComponent::text(" - Teleport to coordinates\n").color("#FFFFFF"),
+                ChatComponent::text("/tp ~<x> ~<y> ~<z>").color("#FFFF55"),
+                ChatComponent::text(" - Teleport relatively\n").color("#FFFFFF"),
+                ChatComponent::text("/pos").color("#FFFF55"),
+                ChatComponent::text(" - Show your position\n").color("#FFFFFF"),
+                ChatComponent::text("/gamemode <creative|spectator>").color("#FFFF55"),
+                ChatComponent::text(" - Change game mode\n").color("#FFFFFF"),
+                ChatComponent::text("/gm <c|s>").color("#FFFF55"),
+                ChatComponent::text(" - Game mode shortcut\n").color("#FFFFFF"),
+                ChatComponent::text("/fly").color("#FFFF55"),
+                ChatComponent::text(" - Toggle fly mode (creative only)").color("#FFFFFF"),
+            ],
+        })
     }
 }
 
-/// Teleport command
 pub struct TpCommand;
 
 impl Command for TpCommand {
@@ -72,43 +62,50 @@ impl Command for TpCommand {
         let target_pos = match args::parse_coords(args, current_pos) {
             Ok(pos) => pos,
             Err(e) => {
-                return CommandResult::Error(
-                    ChatMessage::multiple(vec![
-                        ChatComponent::text("Invalid coordinates: ").color(ChatColor::Red),
-                        ChatComponent::text(&e).color(ChatColor::White),
-                    ])
-                )
+                return CommandResult::Error(ChatMessage {
+                    components: vec![
+                        ChatComponent::text("Invalid coordinates: ").color("#FF5555"),
+                        ChatComponent::text(&e).color("#FFFFFF"),
+                    ],
+                })
             }
         };
 
-        // Update player entity position
-        if let Some(entity) = ctx.executor_entity {
-            if let Ok(mut entities) = ctx.entities.write() {
-                if let Ok(mut pos) = entities.ecs_world.query_one_mut::<&mut Position>(entity) {
-                    pos.set(target_pos);
-                    return CommandResult::Success(
-                        ChatMessage::multiple(vec![
-                            ChatComponent::text("Teleported to ").color(ChatColor::Green),
-                            ChatComponent::text(format!("({:.1}, {:.1}, {:.1})",
-                                target_pos.x, target_pos.y, target_pos.z)
-                            ).color(ChatColor::White),
-                        ])
-                    );
-                }
-            }
-        }
+        let is_relative = args.iter().take(3).any(|s| s.starts_with('~'));
 
-        CommandResult::Error(
-            ChatMessage::Single(
-                ChatComponent::text("Failed to teleport - entity not found")
-                    .color(ChatColor::Red)
-            )
-        )
+        if is_relative {
+            let msg = ChatMessage {
+                components: vec![
+                    ChatComponent::text("Teleported relatively to (").color("#55FF55"),
+                    ChatComponent::text(format!("{:.1}, {:.1}, {:.1})",
+                        target_pos.x, target_pos.y, target_pos.z)
+                    ).color("#FFFFFF"),
+                ],
+            };
+            CommandResult::with_action_msg(msg, ClientAction::TeleportRelative {
+                dx: target_pos.x - current_pos.x,
+                dy: target_pos.y - current_pos.y,
+                dz: target_pos.z - current_pos.z,
+            })
+        } else {
+            let msg = ChatMessage {
+                components: vec![
+                    ChatComponent::text("Teleported to ").color("#55FF55"),
+                    ChatComponent::text(format!("({:.1}, {:.1}, {:.1})",
+                        target_pos.x, target_pos.y, target_pos.z)
+                    ).color("#FFFFFF"),
+                ],
+            };
+            CommandResult::with_action_msg(msg, ClientAction::Teleport {
+                x: target_pos.x,
+                y: target_pos.y,
+                z: target_pos.z,
+            })
+        }
     }
 
     fn tab_complete(&self, args: &[&str], ctx: &CommandContext) -> Vec<TabCompleteSuggestion> {
         if args.len() <= 3 {
-            // Suggest coordinate formats
             let _current = ctx.get_executor_position().unwrap_or(Vec3::ZERO);
             match args.len() {
                 0 => vec![TabCompleteSuggestion::new("~")],
@@ -122,7 +119,6 @@ impl Command for TpCommand {
     }
 }
 
-/// Show current position
 pub struct PosCommand;
 
 impl Command for PosCommand {
@@ -136,24 +132,23 @@ impl Command for PosCommand {
 
     fn execute(&self, _args: &[&str], ctx: &CommandContext) -> CommandResult {
         match ctx.get_executor_position() {
-            Some(pos) => CommandResult::Success(
-                ChatMessage::multiple(vec![
-                    ChatComponent::text("Position: ").color(ChatColor::Yellow),
-                    ChatComponent::text(format!("X: {:.1}, ", pos.x)).color(ChatColor::White),
-                    ChatComponent::text(format!("Y: {:.1}, ", pos.y)).color(ChatColor::White),
-                    ChatComponent::text(format!("Z: {:.1}", pos.z)).color(ChatColor::White),
-                ])
-            ),
-            None => CommandResult::Error(
-                ChatMessage::Single(
-                    ChatComponent::text("Position unknown").color(ChatColor::Red)
-                )
-            ),
+            Some(pos) => CommandResult::Success(ChatMessage {
+                components: vec![
+                    ChatComponent::text("Position: ").color("#FFFF55"),
+                    ChatComponent::text(format!("X: {:.1}, ", pos.x)).color("#FFFFFF"),
+                    ChatComponent::text(format!("Y: {:.1}, ", pos.y)).color("#FFFFFF"),
+                    ChatComponent::text(format!("Z: {:.1}", pos.z)).color("#FFFFFF"),
+                ],
+            }),
+            None => CommandResult::Error(ChatMessage {
+                components: vec![
+                    ChatComponent::text("Position unknown").color("#FF5555")
+                ],
+            }),
         }
     }
 }
 
-/// Game mode command
 pub struct GamemodeCommand;
 
 impl Command for GamemodeCommand {
@@ -175,54 +170,65 @@ impl Command for GamemodeCommand {
 
     fn execute(&self, args: &[&str], ctx: &CommandContext) -> CommandResult {
         if args.is_empty() {
-            return CommandResult::Error(
-                ChatMessage::multiple(vec![
-                    ChatComponent::text("Usage: ").color(ChatColor::Red),
-                    ChatComponent::text("/gamemode <creative|spectator>").color(ChatColor::Yellow),
-                ])
-            );
+            return CommandResult::Error(ChatMessage {
+                components: vec![
+                    ChatComponent::text("Usage: ").color("#FF5555"),
+                    ChatComponent::text("/gamemode <creative|spectator>").color("#FFFF55"),
+                ],
+            });
         }
 
         let mode = match args[0].to_lowercase().as_str() {
             "creative" | "c" => GameMode::Creative { fly_enabled: true },
             "spectator" | "s" => GameMode::Spectator,
             _ => {
-                return CommandResult::Error(
-                    ChatMessage::multiple(vec![
-                        ChatComponent::text("Unknown game mode: ").color(ChatColor::Red),
-                        ChatComponent::text(args[0]).color(ChatColor::White),
-                        ChatComponent::text(". Available: ").color(ChatColor::Gray),
-                        ChatComponent::text("creative").color(ChatColor::Green),
-                        ChatComponent::text(", ").color(ChatColor::Gray),
-                        ChatComponent::text("spectator").color(ChatColor::Green),
-                    ])
-                )
+                return CommandResult::Error(ChatMessage {
+                    components: vec![
+                        ChatComponent::text("Unknown game mode: ").color("#FF5555"),
+                        ChatComponent::text(args[0]).color("#FFFFFF"),
+                        ChatComponent::text(". Available: ").color("#AAAAAA"),
+                        ChatComponent::text("creative").color("#55FF55"),
+                        ChatComponent::text(", ").color("#AAAAAA"),
+                        ChatComponent::text("spectator").color("#55FF55"),
+                    ],
+                })
             }
         };
 
-        if let Some(entity) = ctx.executor_entity {
-            if let Ok(mut entities) = ctx.entities.write() {
-                if let Ok(mut controlled) = entities.ecs_world.query_one_mut::<&mut PlayerControlled>(entity) {
-                    let old_mode = *controlled.get_game_mode();
-                    controlled.set_game_mode(mode);
-                    return CommandResult::Success(
-                        ChatMessage::multiple(vec![
-                            ChatComponent::text("Game mode changed from ").color(ChatColor::Green),
-                            ChatComponent::text(old_mode.name()).color(ChatColor::Yellow),
-                            ChatComponent::text(" to ").color(ChatColor::Green),
-                            ChatComponent::text(mode.name()).color(ChatColor::Yellow),
-                        ])
-                    );
-                }
+        let old_mode = if let Some(entity) = ctx.executor_entity {
+            if let Ok(entities) = ctx.entities.read() {
+                entities.ecs_world.query_one::<&PlayerControlled>(entity)
+                    .get()
+                    .map(|c| *c.get_game_mode())
+                    .unwrap_or(GameMode::Spectator)
+            } else {
+                return CommandResult::Error(ChatMessage {
+                    components: vec![
+                        ChatComponent::text("Failed to access entity world").color("#FF5555")
+                    ],
+                });
             }
-        }
+        } else {
+            return CommandResult::Error(ChatMessage {
+                components: vec![
+                    ChatComponent::text("Failed to change game mode - entity not found").color("#FF5555")
+                ],
+            });
+        };
 
-        CommandResult::Error(
-            ChatMessage::Single(
-                ChatComponent::text("Failed to change game mode - entity not found")
-                    .color(ChatColor::Red)
-            )
-        )
+        let msg = ChatMessage {
+            components: vec![
+                ChatComponent::text("Game mode changed from ").color("#55FF55"),
+                ChatComponent::text(old_mode.name()).color("#FFFF55"),
+                ChatComponent::text(" to ").color("#55FF55"),
+                ChatComponent::text(mode.name()).color("#FFFF55"),
+            ],
+        };
+
+        use voxl_common::network::GameModeData;
+        CommandResult::with_action_msg(msg, ClientAction::SetGameMode {
+            mode: GameModeData::from(&mode),
+        })
     }
 
     fn tab_complete(&self, args: &[&str], _ctx: &CommandContext) -> Vec<TabCompleteSuggestion> {
@@ -239,7 +245,6 @@ impl Command for GamemodeCommand {
     }
 }
 
-/// Toggle fly command
 pub struct FlyCommand;
 
 impl Command for FlyCommand {
@@ -253,42 +258,28 @@ impl Command for FlyCommand {
 
     fn execute(&self, _args: &[&str], ctx: &CommandContext) -> CommandResult {
         if let Some(entity) = ctx.executor_entity {
-            if let Ok(mut entities) = ctx.entities.write() {
-                if let Ok(mut controlled) = entities.ecs_world.query_one_mut::<&mut PlayerControlled>(entity) {
-                    // Only allow flying in creative mode
-                    if !matches!(controlled.get_game_mode(), GameMode::Creative { .. }) {
-                        return CommandResult::Error(
-                            ChatMessage::Single(
-                                ChatComponent::text("Fly mode is only available in creative mode")
-                                    .color(ChatColor::Red)
-                            )
-                        );
-                    }
+            if let Ok(entities) = ctx.entities.read() {
+                let can_fly = entities.ecs_world.query_one::<&PlayerControlled>(entity)
+                    .get()
+                    .map(|c| matches!(c.get_game_mode(), GameMode::Creative { .. }))
+                    .unwrap_or(false);
 
-                    let now_flying = !controlled.is_flying();
-                    controlled.toggle_fly();
-
-                    let (status, color) = if now_flying {
-                        ("enabled", ChatColor::Green)
-                    } else {
-                        ("disabled", ChatColor::Yellow)
-                    };
-
-                    return CommandResult::Success(
-                        ChatMessage::multiple(vec![
-                            ChatComponent::text("Fly mode ").color(ChatColor::White),
-                            ChatComponent::text(status).color(color),
-                        ])
-                    );
+                if !can_fly {
+                    return CommandResult::Error(ChatMessage {
+                        components: vec![
+                            ChatComponent::text("Fly mode is only available in creative mode").color("#FF5555")
+                        ],
+                    });
                 }
+
+                return CommandResult::with_action("", ClientAction::ToggleFly);
             }
         }
 
-        CommandResult::Error(
-            ChatMessage::Single(
-                ChatComponent::text("Failed to toggle fly - entity not found")
-                    .color(ChatColor::Red)
-            )
-        )
+        CommandResult::Error(ChatMessage {
+            components: vec![
+                ChatComponent::text("Failed to toggle fly - entity not found").color("#FF5555")
+            ],
+        })
     }
 }

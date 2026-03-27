@@ -30,6 +30,8 @@ pub struct Server {
     pub settings: ServerSettings,
     /// Connection manager
     pub connections: ConnectionManager,
+    /// Shutdown signal for embedded mode
+    shutdown: Option<tokio::sync::broadcast::Sender<()>>,
 }
 
 impl Server {
@@ -78,6 +80,47 @@ impl Server {
             worldgen,
             settings,
             connections,
+            shutdown: None,
+        })
+    }
+
+    /// Creates a new server instance with a shared registry (for embedded mode)
+    pub fn with_registry(settings: ServerSettings, registry: SharedVoxelRegistry) -> Result<Self, Box<dyn std::error::Error>> {
+        info!("=== Voxl Server Initialization (Embedded Mode) ===");
+        info!("Server name: {}", settings.server_name);
+        info!("Port: {}", settings.port);
+
+        // Load models if not already loaded
+        if !registry.has_models() {
+            if let Err(e) = registry.load_models() {
+                warn!("Failed to load models: {}", e);
+            }
+        }
+
+        // Initialize world generator
+        let mut worldgen = WorldGenerator::new();
+        worldgen.init_block_ids(&registry);
+
+        // Create worlds
+        let world = VoxelWorld::new(registry.clone());
+        let world = Arc::new(RwLock::new(world));
+
+        let entities = EntityWorld::new();
+        let entities = Arc::new(RwLock::new(entities));
+
+        // Create connection manager
+        let connections = ConnectionManager::new(settings.max_players);
+
+        info!("=== Server Initialized (Embedded) ===");
+
+        Ok(Server {
+            world,
+            entities,
+            registry,
+            worldgen,
+            settings,
+            connections,
+            shutdown: None,
         })
     }
 
@@ -277,4 +320,119 @@ async fn server_tick_loop(
 
         // TODO: Broadcast entity updates to all clients
     }
+}
+
+/// Runs the server in embedded mode (for single player)
+/// This function is designed to be run in a background thread.
+///
+/// Returns the actual port the server is listening on.
+pub fn run_embedded_server(
+    settings: voxl_common::ServerSettings,
+    registry: voxl_common::SharedVoxelRegistry,
+) -> Result<u16, Box<dyn std::error::Error>> {
+    use std::sync::mpsc;
+
+    // Create a channel to communicate the actual port back
+    let (port_tx, port_rx) = mpsc::channel();
+
+    // Spawn the server thread
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let _ = rt.block_on(async {
+            // Create the server with the shared registry
+            let server = Server::with_registry(settings, registry).unwrap();
+
+            // Generate initial world before accepting connections
+            info!("[EmbeddedServer] Generating initial world...");
+            if let Err(e) = server.generate_initial_world() {
+                error!("[EmbeddedServer] Failed to generate initial world: {}", e);
+            }
+
+            // Bind to get the actual port
+            let addr = format!("0.0.0.0:{}", server.settings.port);
+            let listener = TcpListener::bind(&addr).await.unwrap();
+
+            // Get the actual port
+            let actual_port = listener.local_addr().unwrap().port();
+
+            // Send the port back
+            let _ = port_tx.send(actual_port);
+
+            info!("[EmbeddedServer] Listening on 0.0.0.0:{}", actual_port);
+
+            // Spawn tick loop for game logic
+            let entities = server.entities.clone();
+            let connections = server.connections.clone();
+            tokio::spawn(async move {
+                server_tick_loop(entities, connections).await;
+            });
+
+            // Accept connections loop (single client for embedded mode)
+            let mut has_client = false;
+
+            loop {
+                tokio::select! {
+                    result = listener.accept() => {
+                        if !result.is_err() && !has_client {
+                            let (stream, addr) = result.unwrap();
+
+                            info!("[EmbeddedServer] Client connected from {}", addr);
+
+                            // Clone shared state for the handler
+                            let world = server.world.clone();
+                            let entities = server.entities.clone();
+                            let registry = server.registry.clone();
+                            let settings = server.settings.clone();
+                            let connections = server.connections.clone();
+
+                            // Create command dispatcher
+                            let dispatcher = CommandDispatcher::with_defaults();
+                            let world_c = world.clone();
+                            let entities_c = entities.clone();
+                            let registry_c = registry.clone();
+                            let settings_c = settings.clone();
+
+                            let execute_command = move |command: &str,
+                                                        player_id: PlayerId,
+                                                        username: &str,
+                                                        entity: Option<hecs::Entity>,
+                                                        players: &[(PlayerId, String)]| {
+                                dispatcher.dispatch(
+                                    command,
+                                    player_id,
+                                    username,
+                                    entity,
+                                    &world_c,
+                                    &entities_c,
+                                    &registry_c,
+                                    &settings_c,
+                                    players,
+                                )
+                            };
+
+                            // Spawn connection handler
+                            tokio::spawn(async move {
+                                crate::connection::handle_connection(
+                                    stream, addr,
+                                    world, entities, registry, settings,
+                                    connections,
+                                    execute_command,
+                                ).await;
+                            });
+
+                            has_client = true;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        // Keepalive tick
+                    }
+                }
+            }
+        });
+    });
+
+    // Wait for the actual port (with timeout - increased for world generation)
+    let actual_port = port_rx.recv_timeout(std::time::Duration::from_secs(30))?;
+    Ok(actual_port)
 }

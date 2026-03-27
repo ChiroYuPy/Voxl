@@ -43,6 +43,23 @@ impl ChunkTracker {
         }
     }
 
+    /// Called when a chunk is requested from server
+    pub fn on_chunk_requested(&self, pos: ChunkPos) {
+        let mut states = self.states.write().unwrap();
+        // Only mark as requested if not already loaded/requested
+        if !states.contains_key(&pos) {
+            states.insert(pos, ChunkState::Requested);
+        }
+        drop(states);
+        debug!("[ChunkTracker] Chunk {:?} requested", pos);
+    }
+
+    /// Returns true if chunk is requested (but not yet loaded)
+    pub fn is_chunk_requested(&self, pos: ChunkPos) -> bool {
+        let states = self.states.read().unwrap();
+        matches!(states.get(&pos), Some(ChunkState::Requested))
+    }
+
     /// Called when a chunk is received from server
     pub fn on_chunk_loaded(&self, pos: ChunkPos) {
         let mut states = self.states.write().unwrap();

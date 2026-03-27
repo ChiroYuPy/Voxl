@@ -88,11 +88,16 @@ impl GameState {
                         info!("[GameState] Embedded server started on port {}", actual_port);
 
                         // Give the server thread time to start listening before connecting
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
                         // Connect to embedded server (localhost) using actual port
                         let server_addr = format!("127.0.0.1:{}", actual_port);
+                        info!("[GameState] Connecting to embedded server at {}", server_addr);
                         self.connect_to_server_async(&server_addr, username).await;
+
+                        // Wait a bit for connection to establish
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        info!("[GameState] Connection state after waiting: {:?}", self.connection_state);
                     }
                     Err(e) => {
                         let msg = format!("Failed to start embedded server: {}", e);
@@ -242,10 +247,34 @@ impl GameState {
         }
     }
 
-    /// Requests chunks from server (deprecated - chunks are auto-sent)
-    #[deprecated(note = "Server now auto-sends chunks")]
-    pub async fn request_chunks(&mut self, _chunks: Vec<(i32, i32, i32)>) -> Result<(), String> {
-        Ok(())
+    /// Sends chat message to server (non-blocking)
+    pub fn send_chat_message(&mut self, message: String) -> Result<(), String> {
+        info!("[GameState] send_chat_message called with: '{}'", message);
+        if !self.is_connected() {
+            return Err("Not connected to server".to_string());
+        }
+
+        if let Some(task) = &self.network_task {
+            task.try_send_chat_message(message);
+            info!("[GameState] try_send_chat_message called");
+            Ok(())
+        } else {
+            Err("Network task not running".to_string())
+        }
+    }
+
+    /// Requests chunks from server (non-blocking)
+    pub fn request_chunks(&mut self, chunks: Vec<(i32, i32, i32)>) -> Result<(), String> {
+        if !self.is_connected() {
+            return Err("Not connected to server".to_string());
+        }
+
+        if let Some(task) = &self.network_task {
+            task.try_send_chunk_request(chunks);
+            Ok(())
+        } else {
+            Err("Network task not running".to_string())
+        }
     }
 
     /// Receives and processes a packet from server (deprecated - use process_network_events)

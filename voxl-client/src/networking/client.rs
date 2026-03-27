@@ -251,9 +251,10 @@ where
     stream.read_exact(&mut len_bytes).await?;
     let len = u32::from_be_bytes(len_bytes) as usize;
 
-    // Sanity check
-    if len > 10_000_000 {
-        return Err("Packet too large".into());
+    // Sanity check (increased to allow multiple chunks per packet)
+    if len > 50_000_000 {
+        // Log the actual bytes for debugging
+        return Err(format!("Packet too large: {} bytes (raw: {:?})", len, len_bytes).into());
     }
 
     // Read packet data

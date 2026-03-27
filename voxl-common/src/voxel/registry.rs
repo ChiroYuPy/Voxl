@@ -6,6 +6,7 @@ use serde::de::Visitor;
 use std::fmt;
 
 use tracing::info;
+use crate::voxel::{ModelLoader, ResolvedBlockModel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RenderType {
@@ -132,9 +133,9 @@ impl VoxelDefinition {
 pub struct VoxelRegistry {
     definitions: Vec<VoxelDefinition>,
     string_to_id: HashMap<String, GlobalVoxelId>,
-    model_loader: Option<crate::voxel::model::ModelLoader>,
+    model_loader: Option<ModelLoader>,
     texture_uvs: HashMap<String, (usize, TextureUV)>,
-    resolved_models: HashMap<String, crate::voxel::model::ResolvedBlockModel>,
+    resolved_models: HashMap<String, ResolvedBlockModel>,
 }
 
 impl VoxelRegistry {
@@ -158,7 +159,7 @@ impl VoxelRegistry {
     }
 
     pub fn load_models(&mut self) -> Result<Vec<String>, String> {
-        let mut loader = crate::voxel::model::ModelLoader::new();
+        let mut loader = ModelLoader::new();
         let textures = loader.load_from_folder()?;
         self.model_loader = Some(loader);
         Ok(textures)

@@ -2951,6 +2951,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "voxl-common",
+ "voxl-server",
  "wgpu",
  "winit",
 ]

@@ -1,5 +1,6 @@
 // Client-specific modules
 pub mod app;
+pub mod chat;
 pub mod chunk_tracker_compat;
 pub mod debug;
 pub mod client_systems;

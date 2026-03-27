@@ -73,12 +73,18 @@ pub enum NetworkCommand {
     SendBlockAction(BlockActionPacket),
     /// Send command request
     SendCommandRequest(CommandRequestPacket),
+    /// Send chat message
+    SendChatMessage(ChatMessagePacket),
+    /// Request chunks from server
+    SendChunkRequest(Vec<(i32, i32, i32)>),
 }
 
 /// Background networking task
 pub struct NetworkTask {
-    /// Command sender
+    /// Command sender (low priority - player updates, etc.)
     command_tx: Sender<NetworkCommand>,
+    /// High-priority command sender (chat, commands)
+    priority_tx: Sender<NetworkCommand>,
     /// Event receiver
     event_rx: Receiver<NetworkEvent>,
     /// Running flag
@@ -89,6 +95,7 @@ impl NetworkTask {
     /// Start the background network task
     pub fn start() -> Self {
         let (command_tx, mut command_rx) = mpsc::channel::<NetworkCommand>(100);
+        let (priority_tx, mut priority_rx) = mpsc::channel::<NetworkCommand>(100);
         let (event_tx, event_rx) = mpsc::channel::<NetworkEvent>(PACKET_CHANNEL_SIZE);
 
         let running = Arc::new(AtomicBool::new(true));
@@ -102,21 +109,24 @@ impl NetworkTask {
             let mut connected = false;
 
             while running_clone.load(Ordering::Relaxed) {
-                // Process commands from main thread
-                if let Ok(mut cmd) = command_rx.try_recv() {
+                // Process priority commands first (chat, commands)
+                if let Ok(mut cmd) = priority_rx.try_recv() {
+                    info!("[NetworkTask] Received PRIORITY command: {:?}", std::mem::discriminant(&cmd));
                     match cmd {
                         NetworkCommand::Connect { address, username } => {
-                            debug!("[NetworkTask] Connecting to {}", address);
+                            info!("[NetworkTask] Connecting to {} as {}", address, username);
                             match Self::do_connect(&address, &username).await {
                                 Ok((s, server_name, player_id)) => {
                                     stream = Some(s);
                                     connected = true;
+                                    info!("[NetworkTask] Connected! Server: {}, Player ID: {}", server_name, player_id);
                                     let _ = event_tx.send(NetworkEvent::Connected {
                                         server_name,
                                         player_id,
                                     }).await;
                                 }
                                 Err(e) => {
+                                    error!("[NetworkTask] Connection failed: {}", e);
                                     let _ = event_tx.send(NetworkEvent::ConnectionFailed {
                                         reason: e,
                                     }).await;
@@ -163,11 +173,110 @@ impl NetworkTask {
                         }
                         NetworkCommand::SendCommandRequest(request) => {
                             if let Some(s) = &mut stream {
+                                info!("[Client -> Server] Command: {}", request.command);
                                 let packet = Packet::new(PacketPayload::CommandRequest(request));
                                 if send_packet(s, &packet).await.is_err() {
                                     debug!("[NetworkTask] Failed to send command request");
                                 }
+                            } else {
+                                error!("[NetworkTask] Cannot send command - not connected (stream is None)");
                             }
+                        }
+                        NetworkCommand::SendChatMessage(msg) => {
+                            if let Some(s) = &mut stream {
+                                info!("[Client -> Server] Chat: {}", msg.message);
+                                let packet = Packet::new(PacketPayload::ChatMessage(msg));
+                                if send_packet(s, &packet).await.is_err() {
+                                    debug!("[NetworkTask] Failed to send chat message");
+                                }
+                            } else {
+                                error!("[NetworkTask] Cannot send chat message - not connected (stream is None)");
+                            }
+                        }
+                        NetworkCommand::SendChunkRequest(chunks) => {
+                            if let Some(s) = &mut stream {
+                                let packet = Packet::new(PacketPayload::ChunkRequest(ChunkRequestPacket {
+                                    chunks,
+                                }));
+                                if send_packet(s, &packet).await.is_err() {
+                                    debug!("[NetworkTask] Failed to send chunk request");
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Process regular commands (player updates, etc.)
+                if let Ok(mut cmd) = command_rx.try_recv() {
+                    match cmd {
+                        NetworkCommand::Connect { address, username } => {
+                            info!("[NetworkTask] Connecting to {} as {}", address, username);
+                            match Self::do_connect(&address, &username).await {
+                                Ok((s, server_name, player_id)) => {
+                                    stream = Some(s);
+                                    connected = true;
+                                    info!("[NetworkTask] Connected! Server: {}, Player ID: {}", server_name, player_id);
+                                    let _ = event_tx.send(NetworkEvent::Connected {
+                                        server_name,
+                                        player_id,
+                                    }).await;
+                                }
+                                Err(e) => {
+                                    error!("[NetworkTask] Connection failed: {}", e);
+                                    let _ = event_tx.send(NetworkEvent::ConnectionFailed {
+                                        reason: e,
+                                    }).await;
+                                }
+                            }
+                        }
+                        NetworkCommand::Disconnect => {
+                            if let Some(mut s) = stream.take() {
+                                let _ = s.shutdown().await;
+                            }
+                            connected = false;
+                            let _ = event_tx.send(NetworkEvent::Disconnected {
+                                reason: DisconnectReason::Left,
+                            }).await;
+                        }
+                        NetworkCommand::SendPacket(packet) => {
+                            if let Some(s) = &mut stream {
+                                if send_packet(s, &packet).await.is_err() {
+                                    error!("[NetworkTask] Failed to send packet");
+                                    stream = None;
+                                    connected = false;
+                                    let _ = event_tx.send(NetworkEvent::Disconnected {
+                                        reason: DisconnectReason::TimedOut,
+                                    }).await;
+                                }
+                            }
+                        }
+                        NetworkCommand::SendPlayerUpdate(update) => {
+                            if let Some(s) = &mut stream {
+                                let packet = Packet::new(PacketPayload::PlayerUpdate(update));
+                                if send_packet(s, &packet).await.is_err() {
+                                    debug!("[NetworkTask] Failed to send player update");
+                                }
+                            }
+                        }
+                        NetworkCommand::SendBlockAction(action) => {
+                            if let Some(s) = &mut stream {
+                                let packet = Packet::new(PacketPayload::BlockAction(action));
+                                if send_packet(s, &packet).await.is_err() {
+                                    debug!("[NetworkTask] Failed to send block action");
+                                }
+                            }
+                        }
+                        NetworkCommand::SendChunkRequest(chunks) => {
+                            if let Some(s) = &mut stream {
+                                let packet = Packet::new(PacketPayload::ChunkRequest(ChunkRequestPacket {
+                                    chunks,
+                                }));
+                                if send_packet(s, &packet).await.is_err() {
+                                    debug!("[NetworkTask] Failed to send chunk request");
+                                }
+                            }
+                        }
+                        NetworkCommand::SendCommandRequest(_) | NetworkCommand::SendChatMessage(_) => {
                         }
                     }
                 }
@@ -189,11 +298,13 @@ impl NetworkTask {
                                 if !e.contains("unexpected end of file") && !e.contains("would block") {
                                     error!("[NetworkTask] Receive error: {}", e);
                                 }
-                                if e.contains("connection reset") || e.contains("broken pipe") {
+                                // Disconnect on stream corruption or connection errors
+                                if e.contains("connection reset") || e.contains("broken pipe")
+                                    || e.contains("Packet too large") || e.contains("deserial") {
                                     stream = None;
                                     connected = false;
                                     let _ = event_tx.send(NetworkEvent::Disconnected {
-                                        reason: DisconnectReason::TimedOut,
+                                        reason: DisconnectReason::Error,
                                     }).await;
                                 }
                             }
@@ -210,6 +321,7 @@ impl NetworkTask {
 
         Self {
             command_tx,
+            priority_tx,
             event_rx,
             running,
         }
@@ -251,8 +363,10 @@ impl NetworkTask {
 
     /// Try to receive a packet without blocking
     async fn try_receive_packet(stream: &mut TcpStream) -> Result<Option<Packet>, String> {
-        // Use very short timeout (1ms) for non-blocking behavior
-        match timeout(Duration::from_millis(1), receive_packet(stream)).await {
+        // Use longer timeout (100ms) to allow chunk packets to be fully received
+        // The timeout only applies if NO data is available - if data starts arriving,
+        // read_exact will wait for the complete packet
+        match timeout(Duration::from_millis(100), receive_packet(stream)).await {
             Ok(Ok(packet)) => Ok(Some(packet)),
             Ok(Err(e)) => Err(format!("Receive error: {}", e)),
             Err(_) => Ok(None), // Timeout - no packet available
@@ -284,12 +398,15 @@ impl NetworkTask {
                 Some(NetworkEvent::PlayerDisconnected(disconn))
             }
             PacketPayload::ChatBroadcast(chat) => {
+                debug!("[Client <- Server] Chat broadcast from '{}': {}", chat.username, chat.message.plain_text());
                 Some(NetworkEvent::Chat(chat))
             }
             PacketPayload::Kicked(kicked) => {
                 Some(NetworkEvent::Kicked(kicked))
             }
             PacketPayload::CommandResponse(response) => {
+                debug!("[Client <- Server] Command response: success={}, message={}",
+                    response.success, response.message.plain_text());
                 Some(NetworkEvent::CommandResponse(response))
             }
             PacketPayload::Disconnect(disconn) => {
@@ -311,12 +428,12 @@ impl NetworkTask {
 
     /// Connect to server
     pub async fn connect(&self, address: String, username: String) {
-        let _ = self.command_tx.send(NetworkCommand::Connect { address, username }).await;
+        let _ = self.priority_tx.send(NetworkCommand::Connect { address, username }).await;
     }
 
     /// Disconnect from server
     pub async fn disconnect(&self) {
-        let _ = self.command_tx.send(NetworkCommand::Disconnect).await;
+        let _ = self.priority_tx.send(NetworkCommand::Disconnect).await;
     }
 
     /// Send player update (async, will block if channel is full)
@@ -341,16 +458,30 @@ impl NetworkTask {
 
     /// Send command request (async, will block if channel is full)
     pub async fn send_command(&self, command: String) {
-        let _ = self.command_tx.send(NetworkCommand::SendCommandRequest(CommandRequestPacket {
+        let _ = self.priority_tx.send(NetworkCommand::SendCommandRequest(CommandRequestPacket {
             command,
         })).await;
     }
 
     /// Send command request (non-blocking, drops packet if channel is full)
     pub fn try_send_command(&self, command: String) {
-        let _ = self.command_tx.try_send(NetworkCommand::SendCommandRequest(CommandRequestPacket {
+        if let Err(_) = self.priority_tx.try_send(NetworkCommand::SendCommandRequest(CommandRequestPacket {
             command,
+        })) {
+            error!("[NetworkTask] Failed to send command - channel full or closed");
+        }
+    }
+
+    /// Send chat message (non-blocking, drops packet if channel is full)
+    pub fn try_send_chat_message(&self, message: String) {
+        let _ = self.priority_tx.try_send(NetworkCommand::SendChatMessage(ChatMessagePacket {
+            message,
         }));
+    }
+
+    /// Request chunks from server (non-blocking, drops request if channel is full)
+    pub fn try_send_chunk_request(&self, chunks: Vec<(i32, i32, i32)>) {
+        let _ = self.command_tx.try_send(NetworkCommand::SendChunkRequest(chunks));
     }
 
     /// Try to receive an event (non-blocking)

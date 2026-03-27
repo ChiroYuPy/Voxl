@@ -1,4 +1,4 @@
-pub mod commands;
+// Commands are now handled server-side, no local command module
 
 use egui::{Context, ScrollArea, TextEdit, Align2};
 use std::fmt::Write as FmtWrite;
@@ -7,8 +7,9 @@ use std::io::Write as IoWrite;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use crate::performance::PerformanceSnapshot;
+use crate::chat::ChatManager;
 use voxl_common::voxel::VoxelFace;
-use voxl_common::chat::{ChatMessage as CommonChatMessage, ChatComponent, ChatColor};
+use voxl_common::chat::{ChatMessage as CommonChatMessage, ChatComponent};
 
 /// 3x3 grid anchor positions for debug text
 #[derive(Debug, Clone, Copy)]
@@ -218,28 +219,6 @@ fn draw_formatted_text(ctx: &Context, id: &str, text: &DebugText, anchor: TextAn
         });
 }
 
-#[derive(Clone)]
-pub struct ChatEntry {
-    pub message: CommonChatMessage,
-    pub timestamp: Instant,
-}
-
-impl ChatEntry {
-    fn from_text(text: String) -> Self {
-        Self {
-            message: CommonChatMessage::text(text),
-            timestamp: Instant::now(),
-        }
-    }
-
-    fn from_message(message: CommonChatMessage) -> Self {
-        Self {
-            message,
-            timestamp: Instant::now(),
-        }
-    }
-}
-
 pub struct EguiState {
     pub ctx: Context,
     pub enabled: bool,
@@ -252,7 +231,7 @@ pub struct EguiState {
     // Chat system
     pub chat_open: bool,
     chat_input: String,
-    chat_messages: Vec<ChatEntry>,
+    pub chat: ChatManager,
     pub chat_focused: bool,
     chat_focus_requested: bool,
 
@@ -267,10 +246,7 @@ impl EguiState {
     pub fn new(window: &winit::window::Window) -> Self {
         let ctx = Context::default();
 
-        // Set pixels_per_point from window scale factor
         let pixels_per_point = window.scale_factor() as f32;
-
-        // Enable dark mode
         ctx.set_visuals(egui::Visuals::dark());
 
         Self {
@@ -284,7 +260,7 @@ impl EguiState {
 
             chat_open: false,
             chat_input: String::new(),
-            chat_messages: Vec::new(),
+            chat: ChatManager::new(),
             chat_focused: false,
             chat_focus_requested: false,
 
@@ -335,49 +311,24 @@ impl EguiState {
     }
 
     pub fn add_chat_message(&mut self, message: CommonChatMessage) {
-        self.chat_messages.push(ChatEntry::from_message(message));
-        // Garder seulement les 100 derniers messages
-        if self.chat_messages.len() > 100 {
-            self.chat_messages.remove(0);
-        }
+        self.chat.add_message(message);
     }
 
-    /// Add a simple text message (legacy compatibility)
     pub fn add_chat_text(&mut self, text: String) {
-        self.chat_messages.push(ChatEntry::from_text(text));
-        if self.chat_messages.len() > 100 {
-            self.chat_messages.remove(0);
-        }
+        self.chat.add_text(text);
     }
 
-    /// Display a chat message with colored components
     fn show_chat_message(ui: &mut egui::Ui, message: &CommonChatMessage) {
-        use egui::{self, RichText};
+        use egui::RichText;
 
-        // Affiche tous les composants sur une seule ligne (horizontalement)
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;  // Pas d'espace entre les composants
+            ui.spacing_mut().item_spacing.x = 0.0;
 
             for component in message.components() {
-                let mut rich_text = RichText::new(&component.get_text());
+                let mut rich_text = RichText::new(&component.text);
 
-                // Set color
-                if let Some(color) = component.color {
-                    rich_text = rich_text.color(Self::chat_color_to_egui(color));
-                }
-
-                // Set formatting
-                if component.format.bold {
-                    rich_text = rich_text.strong();
-                }
-                if component.format.italic {
-                    rich_text = rich_text.italics();
-                }
-                if component.format.underlined {
-                    rich_text = rich_text.underline();
-                }
-                if component.format.strikethrough {
-                    rich_text = rich_text.strikethrough();
+                if let Some(color) = &component.color {
+                    rich_text = rich_text.color(Self::parse_hex_color(color));
                 }
 
                 ui.label(rich_text);
@@ -385,31 +336,21 @@ impl EguiState {
         });
     }
 
-    /// Convert ChatColor to egui Color32
-    fn chat_color_to_egui(color: ChatColor) -> egui::Color32 {
-        match color {
-            ChatColor::Black => egui::Color32::BLACK,
-            ChatColor::DarkBlue => egui::Color32::from_rgb(0, 0, 170),
-            ChatColor::DarkGreen => egui::Color32::from_rgb(0, 170, 0),
-            ChatColor::DarkAqua => egui::Color32::from_rgb(0, 170, 170),
-            ChatColor::DarkRed => egui::Color32::from_rgb(170, 0, 0),
-            ChatColor::DarkPurple => egui::Color32::from_rgb(170, 0, 170),
-            ChatColor::Gold => egui::Color32::from_rgb(255, 170, 0),
-            ChatColor::Gray => egui::Color32::from_rgb(170, 170, 170),
-            ChatColor::DarkGray => egui::Color32::from_rgb(85, 85, 85),
-            ChatColor::Blue => egui::Color32::from_rgb(85, 85, 255),
-            ChatColor::Green => egui::Color32::from_rgb(85, 255, 85),
-            ChatColor::Aqua => egui::Color32::from_rgb(85, 255, 255),
-            ChatColor::Red => egui::Color32::from_rgb(255, 85, 85),
-            ChatColor::LightPurple => egui::Color32::from_rgb(255, 85, 255),
-            ChatColor::Yellow => egui::Color32::from_rgb(255, 255, 85),
-            ChatColor::White => egui::Color32::WHITE,
-            ChatColor::Reset => egui::Color32::WHITE,
+    fn parse_hex_color(hex: &str) -> egui::Color32 {
+        let hex = hex.trim_start_matches('#');
+        if hex.len() == 6 {
+            if let Ok(rgb) = u32::from_str_radix(hex, 16) {
+                let r = ((rgb >> 16) & 0xFF) as u8;
+                let g = ((rgb >> 8) & 0xFF) as u8;
+                let b = (rgb & 0xFF) as u8;
+                return egui::Color32::from_rgb(r, g, b);
+            }
         }
+        egui::Color32::WHITE
     }
 
     pub fn clear_chat(&mut self) {
-        self.chat_messages.clear();
+        self.chat.clear();
     }
 
     /// Calculate which face the camera is facing based on direction vector
@@ -785,44 +726,38 @@ impl EguiState {
         }
     }
 
-    /// Affiche les messages de chat (sans input) - visible tout le temps
     pub fn show_chat_messages(&self) {
-        if self.chat_messages.is_empty() {
+        let messages = self.chat.messages();
+        if messages.is_empty() {
             return;
         }
 
-        let chat_messages = self.chat_messages.clone();
-
-        // Quand le chat est ouvert, on affiche plus de messages et on permet le scroll
         let (max_height, visible_count) = if self.chat_open {
-            (300.0, 20)  // Plus grand quand chat ouvert, scrollable
+            (300.0, 20)
         } else {
-            (120.0, 6)   // Plus petit quand chat fermé
+            (120.0, 6)
         };
 
         egui::Area::new(egui::Id::new("chat_messages_area"))
-            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -40.0])  // Au-dessus de l'input
+            .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -40.0])
             .show(&self.ctx, |ui| {
                 ui.set_width(400.0);
                 ui.set_max_height(max_height);
 
-                // Zone de messages avec scroll - toujours scroller vers le bas (nouveaux messages)
                 ScrollArea::vertical()
                     .id_source("chat_scroll")
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 4.0;
 
-                        // Afficher les messages du plus ancien au plus récent (haut en bas)
-                        // Prendre seulement les derniers messages visibles
-                        let start = if chat_messages.len() > visible_count {
-                            chat_messages.len() - visible_count
+                        let start = if messages.len() > visible_count {
+                            messages.len() - visible_count
                         } else {
                             0
                         };
 
-                        for entry in chat_messages.iter().skip(start) {
-                            Self::show_chat_message(ui, &entry.message);
+                        for message in messages.iter().skip(start) {
+                            Self::show_chat_message(ui, message);
                         }
                     });
             });
@@ -835,7 +770,12 @@ impl EguiState {
             return None;
         }
 
-        let mut submitted_command = None;
+        // Check for Enter key BEFORE creating the widget (at context level)
+        let ctx = &self.ctx;
+        let enter_pressed_this_frame = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        let had_focus_last_frame = self.chat_focused;
+
+        let mut submitted_input = None;
         let mut should_close = false;
         let mut input_text = String::new();
         let focus_requested = self.chat_focus_requested;
@@ -846,12 +786,12 @@ impl EguiState {
         // Position l'input en bas de l'écran
         egui::Area::new(egui::Id::new("chat_input_area"))
             .anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0])
-            .show(&self.ctx, |ui| {
+            .show(ctx, |ui| {
                 ui.set_width(400.0);
 
                 // Champ de saisie
                 let mut temp_input = self.chat_input.clone();
-                let response = ui.add_sized(
+                let text_edit_response = ui.add_sized(
                     [400.0, 25.0],
                     TextEdit::singleline(&mut temp_input)
                         .id(egui::Id::new("chat_input"))
@@ -866,13 +806,16 @@ impl EguiState {
 
                 // Mettre à jour l'input
                 self.chat_input = temp_input;
-                self.chat_focused = response.has_focus();
+                self.chat_focused = text_edit_response.has_focus();
 
                 // Gérer la soumission avec Entrée
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                // If we had focus and Enter was pressed this frame, submit
+                if had_focus_last_frame && enter_pressed_this_frame {
                     input_text = self.chat_input.clone();
                     should_close = true;
-                } else if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    // Surrender focus to prevent issues
+                    ui.memory_mut(|mem| mem.surrender_focus(egui::Id::new("chat_input")));
+                } else if text_edit_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     should_close = true;
                 }
             });
@@ -880,22 +823,16 @@ impl EguiState {
         // Traiter les résultats après la closure
         if should_close {
             if !input_text.is_empty() {
-                if input_text.starts_with('/') {
-                    // C'est une commande - pas d'affichage, juste exécution
-                    submitted_command = Some(input_text.clone());
-                } else {
-                    // C'est un message de chat
-                    self.add_chat_message(CommonChatMessage::multiple(vec![
-                        ChatComponent::text("<Player> ").color(ChatColor::Gray),
-                        ChatComponent::text(&input_text).color(ChatColor::White),
-                    ]));
-                }
-                self.chat_input.clear();
+                // Submit ALL input (both commands and chat messages) to be handled by the app
+                // The app will distinguish between commands (starting with '/') and regular messages
+                tracing::info!("[Chat UI] Submitting input: '{}'", input_text);
+                submitted_input = Some(input_text.clone());
             }
+            self.chat_input.clear();
             self.close_chat();
         }
 
-        submitted_command
+        submitted_input
     }
 
     pub fn context(&self) -> &Context {

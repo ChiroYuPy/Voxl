@@ -5,7 +5,7 @@
 //! and receives responses.
 
 use std::sync::{Arc, RwLock};
-use crate::{PlayerId, VoxelWorld, EntityWorld, SharedVoxelRegistry, ServerSettings};
+use crate::{PlayerId, VoxelWorld, EntityWorld, SharedVoxelRegistry, ServerSettings, network::ClientAction};
 use crate::chat::ChatMessage;
 use glam::Vec3;
 use hecs::Entity;
@@ -19,12 +19,14 @@ pub enum CommandResult {
     Error(ChatMessage),
     /// Silent command (no output)
     None,
+    /// Success with a client action to perform (teleport, gamemode change, etc.)
+    SuccessWithAction(ChatMessage, ClientAction),
 }
 
 impl CommandResult {
     /// Returns true if the command succeeded
     pub fn is_success(&self) -> bool {
-        matches!(self, Self::Success(_) | Self::None)
+        matches!(self, Self::Success(_) | Self::None | Self::SuccessWithAction(_, _))
     }
 
     /// Returns true if the command resulted in an error
@@ -37,7 +39,16 @@ impl CommandResult {
         match self {
             Self::Success(msg) => Some(msg),
             Self::Error(msg) => Some(msg),
+            Self::SuccessWithAction(msg, _) => Some(msg),
             Self::None => None,
+        }
+    }
+
+    /// Gets the client action if any
+    pub fn get_action(&self) -> Option<&ClientAction> {
+        match self {
+            Self::SuccessWithAction(_, action) => Some(action),
+            _ => None,
         }
     }
 
@@ -49,6 +60,16 @@ impl CommandResult {
     /// Creates an error result from a plain string
     pub fn err(msg: impl Into<String>) -> Self {
         Self::Error(ChatMessage::text(msg.into()))
+    }
+
+    /// Creates a success result with a client action
+    pub fn with_action(msg: impl Into<String>, action: ClientAction) -> Self {
+        Self::SuccessWithAction(ChatMessage::text(msg.into()), action)
+    }
+
+    /// Creates a success result with a client action (using ChatMessage)
+    pub fn with_action_msg(msg: ChatMessage, action: ClientAction) -> Self {
+        Self::SuccessWithAction(msg, action)
     }
 }
 

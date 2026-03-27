@@ -22,7 +22,7 @@ pub struct GraphicsSettings {
 impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
-            render_distance: 8,
+            render_distance: 12,  // Increased to load more chunks
             ao_intensity: 0.7,
             vsync: true,
             max_fps: 144,
@@ -137,16 +137,11 @@ impl Default for ServerModeConfig {
     }
 }
 
-/// Server settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerSettings {
-    /// World generation distance in chunks (radius around spawn)
     pub world_gen_distance: u32,
-    /// Port for the server
     pub port: u16,
-    /// Maximum number of players
     pub max_players: usize,
-    /// Server name displayed in client
     pub server_name: String,
     /// MOTD (Message of the Day)
     pub motd: String,
@@ -159,12 +154,12 @@ pub struct ServerSettings {
 impl Default for ServerSettings {
     fn default() -> Self {
         Self {
-            world_gen_distance: 16,
+            world_gen_distance: 2,
             port: 25565,
-            max_players: 10,
+            max_players: 4,
             server_name: "Voxl Server".to_string(),
             motd: "Welcome to Voxl Server!".to_string(),
-            verbose_worldgen: true,
+            verbose_worldgen: false,
             worldgen_threads: 4,
         }
     }

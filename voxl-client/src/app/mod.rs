@@ -3,8 +3,7 @@ use crate::raycast::{Ray, RAYCAST_DISTANCE, Raycast};
 use crate::input::{InputManager, GameAction, KeyBindings};
 use voxl_common::voxel::GlobalVoxelId;
 use voxl_common::entities::GameMode;
-use voxl_common::chat::{ChatMessage, ChatComponent, ChatColor};
-use crate::debug::commands::{execute_command, CommandResult};
+use voxl_common::chat::{ChatMessage, ChatComponent};
 use crate::client_systems::{player_input_system, player_physics_system, jump_system};
 use voxl_common::config::GameConfig;
 use crate::game_state::GameState;
@@ -33,6 +32,7 @@ pub struct App {
     server_integration: ServerIntegration,  // Server integration
     tokio_runtime: Option<tokio::runtime::Runtime>,  // Runtime for async operations
     sequence_number: u32,  // Sequence number for packets
+    last_chunk_request_time: Instant,  // Rate limiting for chunk requests
 }
 
 impl Default for App {
@@ -54,6 +54,7 @@ impl Default for App {
             server_integration: ServerIntegration::new(),
             tokio_runtime: None,
             sequence_number: 0,
+            last_chunk_request_time: Instant::now(),
         }
     }
 }
@@ -284,99 +285,40 @@ impl App {
         self.set_selected_block(final_id, &block_name);
     }
 
-    fn handle_chat_command(&mut self, command: String) {
+    fn handle_chat_input(&mut self, input: String) {
+        info!("[App] handle_chat_input called with: '{}'", input);
         let wgpu_state = if let Some(s) = &mut self.wgpu_state { s } else { return };
 
-        // In embedded mode, execute commands locally (single player)
-        // In remote mode, send to server
-        if self.server_integration.game_state.is_embedded_mode() {
-            // Execute locally
-            let current_pos = wgpu_state.camera().position;
-            let result = execute_command(&command, current_pos.into());
-
-            match result {
-                CommandResult::Success(msg) => {
-                    // msg is already a ChatMessage, just add it directly
-                    wgpu_state.add_chat_message(msg);
-                }
-                CommandResult::Error(msg) => {
-                    // msg is already a ChatMessage, add it directly
-                    wgpu_state.add_chat_message(msg);
-                }
-                CommandResult::Teleport(pos) => {
-                    wgpu_state.teleport_player(pos);
-                    wgpu_state.add_chat_message(ChatMessage::multiple(vec![
-                        ChatComponent::text("Teleported to (").color(ChatColor::Green),
-                        ChatComponent::text(&format!("{:.1}, ", pos.x)).color(ChatColor::White),
-                        ChatComponent::text(&format!("{:.1}, ", pos.y)).color(ChatColor::White),
-                        ChatComponent::text(&format!("{:.1})", pos.z)).color(ChatColor::White),
-                    ]));
-                }
-                CommandResult::TeleportRelative(pos) => {
-                    wgpu_state.teleport_player_relative(pos);
-                    wgpu_state.add_chat_message(ChatMessage::multiple(vec![
-                        ChatComponent::text("Teleported relatively to (").color(ChatColor::Green),
-                        ChatComponent::text(&format!("{:.1}, ", pos.x)).color(ChatColor::White),
-                        ChatComponent::text(&format!("{:.1}, ", pos.y)).color(ChatColor::White),
-                        ChatComponent::text(&format!("{:.1})", pos.z)).color(ChatColor::White),
-                    ]));
-                }
-                CommandResult::None => {}
-                CommandResult::ClearChat => {
-                    wgpu_state.clear_chat();
-                    wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Chat cleared").color(ChatColor::Yellow)));
-                }
-                CommandResult::SetGameMode(mode) => {
-                    wgpu_state.set_game_mode(mode);
-                    let mode_name = mode.name();
-                    wgpu_state.add_chat_message(ChatMessage::multiple(vec![
-                        ChatComponent::text("Game mode set to ").color(ChatColor::Green),
-                        ChatComponent::text(mode_name).color(ChatColor::Gold),
-                    ]));
-
-                    if matches!(mode, GameMode::Spectator) {
-                        wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Spectator mode: flying enabled, collisions disabled").color(ChatColor::Gray)));
-                    }
-                }
-                CommandResult::ToggleFly => {
-                    if let Some(current_mode) = wgpu_state.get_game_mode() {
-                        match current_mode {
-                            GameMode::Spectator => {
-                                wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Cannot toggle fly in spectator mode!").color(ChatColor::Red)));
-                            }
-                            GameMode::Creative { .. } => {
-                                wgpu_state.toggle_fly();
-                                let new_mode = wgpu_state.get_game_mode().unwrap();
-                                let (status, color) = if new_mode.is_flying() {
-                                    ("enabled", ChatColor::Green)
-                                } else {
-                                    ("disabled", ChatColor::Yellow)
-                                };
-                                wgpu_state.add_chat_message(ChatMessage::multiple(vec![
-                                    ChatComponent::text("Fly mode ").color(ChatColor::White),
-                                    ChatComponent::text(status).color(color),
-                                ]));
-                            }
-                        }
-                    }
-                }
-            }
+        // Check if connected to server
+        if !self.server_integration.is_connected() {
+            wgpu_state.add_chat_message(ChatMessage {
+                components: vec![ChatComponent::text("Not connected to server").color("#FF5555")]
+            });
             return;
         }
 
-        // Remote server mode: send command to server for execution
-        if self.server_integration.is_connected() {
-            if let Err(e) = self.server_integration.send_command(command.clone()) {
-                wgpu_state.add_chat_message(ChatMessage::multiple(vec![
-                    ChatComponent::text("Failed to send command: ").color(ChatColor::Red),
-                    ChatComponent::text(&e).color(ChatColor::White),
-                ]));
+        // Distinguish between commands (starting with '/') and regular chat messages
+        if input.starts_with('/') {
+            // It's a command - send to server as CommandRequest
+            if let Err(e) = self.server_integration.send_command(input.clone()) {
+                wgpu_state.add_chat_message(ChatMessage {
+                    components: vec![
+                        ChatComponent::text("Failed to send command: ").color("#FF5555"),
+                        ChatComponent::text(&e).color("#FFFFFF"),
+                    ],
+                });
             }
-            return;
+        } else {
+            // It's a chat message - send to server as ChatMessage
+            if let Err(e) = self.server_integration.send_chat_message(input.clone()) {
+                wgpu_state.add_chat_message(ChatMessage {
+                    components: vec![
+                        ChatComponent::text("Failed to send message: ").color("#FF5555"),
+                        ChatComponent::text(&e).color("#FFFFFF"),
+                    ],
+                });
+            }
         }
-
-        // Not connected - show error
-        wgpu_state.add_chat_message(ChatMessage::single(ChatComponent::text("Not connected to server").color(ChatColor::Red)));
     }
 
     fn update_block_highlight(&mut self) {
@@ -703,19 +645,54 @@ impl ApplicationHandler for App {
                     if response.success {
                         wgpu_state.add_chat_message(response.message.clone());
                     } else {
-                        // Prepend "Error: " in red to error messages
-                        wgpu_state.add_chat_message(ChatMessage::multiple(vec![
-                            ChatComponent::text("Error: ").color(ChatColor::Red),
-                            // Clone the response message
-                            match response.message.clone() {
-                                ChatMessage::Single(comp) => ChatComponent::text(&comp.get_text()).color(ChatColor::White),
-                                ChatMessage::Multiple(comps) => {
-                                    // For multi-component messages, just show plain text for now
-                                    ChatComponent::text(&response.message.plain_text()).color(ChatColor::White)
-                                }
-                            },
-                        ]));
+                        wgpu_state.add_chat_message(ChatMessage {
+                            components: vec![
+                                ChatComponent::text("Error: ").color("#FF5555"),
+                                ChatComponent::text(&response.message.plain_text()).color("#FFFFFF"),
+                            ],
+                        });
                     }
+
+                    // Handle client action if present
+                    if let Some(action) = response.action {
+                        use voxl_common::network::ClientAction;
+                        match action {
+                            ClientAction::Teleport { x, y, z } => {
+                                wgpu_state.teleport_player(glam::Vec3::new(x, y, z));
+                            }
+                            ClientAction::TeleportRelative { dx, dy, dz } => {
+                                wgpu_state.teleport_player_relative(glam::Vec3::new(dx, dy, dz));
+                            }
+                            ClientAction::SetGameMode { mode } => {
+                                wgpu_state.set_game_mode(mode.into());
+                            }
+                            ClientAction::ToggleFly => {
+                                if let Some(current_mode) = wgpu_state.get_game_mode() {
+                                    if matches!(current_mode, GameMode::Creative { .. }) {
+                                        wgpu_state.toggle_fly();
+                                    }
+                                }
+                            }
+                            ClientAction::ClearChat => {
+                                wgpu_state.clear_chat();
+                            }
+                        }
+                    }
+                }
+
+                // Process chat messages from server
+                for chat_msg in self.server_integration.drain_chat_messages() {
+                    let content = chat_msg.message.components.clone();
+
+                    wgpu_state.add_chat_message(ChatMessage {
+                        components: vec![
+                            ChatComponent::text("<").color("#AAAAAA"),
+                            ChatComponent::text(&chat_msg.username).color("#55FF55"),
+                            ChatComponent::text("> ").color("#AAAAAA"),
+                        ],
+                    });
+
+                    wgpu_state.add_chat_message(ChatMessage { components: content });
                 }
 
                 // Request meshes for chunks loaded from server
@@ -733,6 +710,81 @@ impl ApplicationHandler for App {
                 });
                 if marked_count > 0 {
                     debug!("[App] Marked {} chunks as meshed (have meshes)", marked_count);
+                }
+
+                // Request chunks from server based on player position
+                // Rate limit: only request chunks every 20ms to load chunks faster
+                let can_request_chunks = self.server_integration.is_connected()
+                    && self.last_chunk_request_time.elapsed() >= std::time::Duration::from_millis(20);
+
+                if can_request_chunks {
+                    let render_distance = self.config.graphics.render_distance as i32;
+                    let player_chunk = {
+                        let cam_pos = wgpu_state.camera().position;
+                        (
+                            (cam_pos.x as i32 / voxl_common::CHUNK_SIZE as i32).signum() * (cam_pos.x.abs() as i32 / voxl_common::CHUNK_SIZE as i32),
+                            (cam_pos.y as i32 / voxl_common::CHUNK_SIZE as i32).signum() * (cam_pos.y.abs() as i32 / voxl_common::CHUNK_SIZE as i32),
+                            (cam_pos.z as i32 / voxl_common::CHUNK_SIZE as i32).signum() * (cam_pos.z.abs() as i32 / voxl_common::CHUNK_SIZE as i32),
+                        )
+                    };
+
+                    let world = wgpu_state.world().read().unwrap();
+                    let mut chunks_to_request = Vec::new();
+
+                    // Request chunks within render distance - use full render_distance
+                    let request_radius = render_distance;
+                    for dy in -6..=6 {  // More Y levels
+                        for dz in -request_radius..=request_radius {
+                            for dx in -request_radius..=request_radius {
+                                let chunk_x = player_chunk.0 + dx;
+                                let chunk_y = player_chunk.1 + dy;
+                                let chunk_z = player_chunk.2 + dz;
+
+                                // Skip if out of bounds
+                                if chunk_y < 0 || chunk_y >= (voxl_common::WORLD_HEIGHT / voxl_common::CHUNK_SIZE) as i32 {
+                                    continue;
+                                }
+
+                                // Skip if chunk already exists in world
+                                if world.get_chunk_existing(chunk_x, chunk_y, chunk_z).is_some() {
+                                    continue;
+                                }
+
+                                // Skip if already requested
+                                if self.server_integration.chunk_tracker.is_chunk_requested((chunk_x, chunk_y, chunk_z)) {
+                                    continue;
+                                }
+
+                                chunks_to_request.push((chunk_x, chunk_y, chunk_z));
+
+                                // Limit to 100 chunks per request
+                                if chunks_to_request.len() >= 100 {
+                                    break;
+                                }
+                            }
+                            if chunks_to_request.len() >= 100 {
+                                break;
+                            }
+                        }
+                        if chunks_to_request.len() >= 100 {
+                            break;
+                        }
+                    }
+
+                    // Mark chunks as requested before sending
+                    for pos in &chunks_to_request {
+                        self.server_integration.chunk_tracker.on_chunk_requested(*pos);
+                    }
+
+                    // Send chunk request
+                    if !chunks_to_request.is_empty() {
+                        if let Err(e) = self.server_integration.request_chunks(chunks_to_request.clone()) {
+                            debug!("[App] Failed to request chunks: {}", e);
+                        } else {
+                            debug!("[App] Requested {} chunks from server", chunks_to_request.len());
+                            self.last_chunk_request_time = Instant::now();
+                        }
+                    }
                 }
             }
             let networking_duration = networking_start.elapsed();
@@ -929,18 +981,20 @@ impl ApplicationHandler for App {
                         if let Some(current_mode) = state.get_game_mode() {
                             match current_mode {
                                 GameMode::Spectator => {
-                                    state.add_chat_message(ChatMessage::Single(
-                                        ChatComponent::text("Impossible de toggle le fly en mode spectateur!").color(ChatColor::Red)
-                                    ));
+                                    state.add_chat_message(ChatMessage {
+                                        components: vec![ChatComponent::text("Impossible de toggle le fly en mode spectateur!").color("#FF5555")]
+                                    });
                                 }
                                 GameMode::Creative { .. } => {
                                     state.toggle_fly();
                                     let new_mode = state.get_game_mode().unwrap();
-                                    let (status, color) = if new_mode.is_flying() { ("activé", ChatColor::Green) } else { ("désactivé", ChatColor::Yellow) };
-                                    state.add_chat_message(ChatMessage::multiple(vec![
-                                        ChatComponent::text("Mode vol ").color(ChatColor::White),
-                                        ChatComponent::text(status).color(color),
-                                    ]));
+                                    let (status, color) = if new_mode.is_flying() { ("activé", "#55FF55") } else { ("désactivé", "#FFFF55") };
+                                    state.add_chat_message(ChatMessage {
+                                        components: vec![
+                                            ChatComponent::text("Mode vol ").color("#FFFFFF"),
+                                            ChatComponent::text(status).color(color),
+                                        ],
+                                    });
                                 }
                             }
                         }
@@ -996,14 +1050,16 @@ impl ApplicationHandler for App {
                         };
                         state.set_game_mode(new_mode);
                         let mode_name = new_mode.name();
-                        state.add_chat_message(ChatMessage::multiple(vec![
-                            ChatComponent::text("Mode de jeu changé: ").color(ChatColor::Green),
-                            ChatComponent::text(mode_name).color(ChatColor::Yellow),
-                        ]));
+                        state.add_chat_message(ChatMessage {
+                            components: vec![
+                                ChatComponent::text("Mode de jeu changé: ").color("#55FF55"),
+                                ChatComponent::text(mode_name).color("#FFFF55"),
+                            ],
+                        });
                         if matches!(new_mode, GameMode::Spectator) {
-                            state.add_chat_message(ChatMessage::Single(
-                                ChatComponent::text("Mode spectateur: vol activé, collisions désactivées").color(ChatColor::Gray)
-                            ));
+                            state.add_chat_message(ChatMessage {
+                                components: vec![ChatComponent::text("Mode spectateur: vol activé, collisions désactivées").color("#AAAAAA")]
+                            });
                         }
                     }
                 }
@@ -1020,7 +1076,8 @@ impl ApplicationHandler for App {
             };
 
             if let Some(command) = submitted_command {
-                self.handle_chat_command(command);
+                info!("[App] Got submitted command: '{}'", command);
+                self.handle_chat_input(command);
             }
 
             // Check si le chat vient de se fermer (après envoi message)

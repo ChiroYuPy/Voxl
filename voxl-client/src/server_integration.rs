@@ -20,6 +20,15 @@ use tracing::{info, warn, error, debug};
 pub struct PendingCommandResponse {
     pub success: bool,
     pub message: ChatMessage,
+    pub action: Option<voxl_common::network::ClientAction>,
+}
+
+/// Chat broadcast waiting to be displayed
+#[derive(Debug, Clone)]
+pub struct PendingChatMessage {
+    pub player_id: PlayerId,
+    pub username: String,
+    pub message: ChatMessage,
 }
 
 /// Processes a packet received from the server
@@ -131,6 +140,8 @@ pub struct ServerIntegration {
     pub chunk_tracker: Arc<ChunkTracker>,
     /// Pending command responses from server
     pending_responses: VecDeque<PendingCommandResponse>,
+    /// Pending chat messages from server
+    pending_chat_messages: VecDeque<PendingChatMessage>,
 }
 
 impl ServerIntegration {
@@ -140,6 +151,7 @@ impl ServerIntegration {
             game_state: GameState::new(),
             chunk_tracker: Arc::new(ChunkTracker::new()),
             pending_responses: VecDeque::new(),
+            pending_chat_messages: VecDeque::new(),
         }
     }
 
@@ -220,7 +232,12 @@ impl ServerIntegration {
                 }
                 NetworkEvent::Chat(chat) => {
                     info!("[Chat] {}: {}", chat.username, chat.message);
-                    // TODO: Add to chat log
+                    // Store chat message for UI to display
+                    self.pending_chat_messages.push_back(PendingChatMessage {
+                        player_id: chat.player_id,
+                        username: chat.username.clone(),
+                        message: chat.message.clone(),
+                    });
                 }
                 NetworkEvent::Kicked(kicked) => {
                     error!("[Server] Kicked from server: {}", kicked.reason);
@@ -241,6 +258,7 @@ impl ServerIntegration {
                     self.pending_responses.push_back(PendingCommandResponse {
                         success: response.success,
                         message: response.message,
+                        action: response.action,
                     });
                 }
             }
@@ -297,9 +315,24 @@ impl ServerIntegration {
         std::mem::take(&mut self.pending_responses).into_iter().collect()
     }
 
+    /// Drains all pending chat messages
+    pub fn drain_chat_messages(&mut self) -> Vec<PendingChatMessage> {
+        std::mem::take(&mut self.pending_chat_messages).into_iter().collect()
+    }
+
     /// Sends command to server (non-blocking)
     pub fn send_command(&mut self, command: String) -> Result<(), String> {
         self.game_state.send_command(command)
+    }
+
+    /// Sends chat message to server (non-blocking)
+    pub fn send_chat_message(&mut self, message: String) -> Result<(), String> {
+        self.game_state.send_chat_message(message)
+    }
+
+    /// Requests chunks from server (non-blocking)
+    pub fn request_chunks(&mut self, chunks: Vec<(i32, i32, i32)>) -> Result<(), String> {
+        self.game_state.request_chunks(chunks)
     }
 }
 

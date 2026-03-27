@@ -1,11 +1,3 @@
-//! Voxl Server - Headless server with networking
-//!
-//! Dedicated server managing:
-//! - World generation and authoritative state
-//! - Player connections via TCP
-//! - Entity synchronization (ECS)
-//! - Network communication with clients
-
 pub mod server;
 pub mod connection;
 pub mod player;

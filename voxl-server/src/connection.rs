@@ -7,6 +7,7 @@ use voxl_common::{
     EntityWorld, ServerSettings,
     entities::{Position, Velocity, LookDirection},
     network::*,
+    voxel::GlobalVoxelId,
     CommandResult, ChatMessage,
 };
 use tracing::{info, warn, error};
@@ -357,34 +358,85 @@ where
 
         PacketPayload::BlockAction(action) => {
             // Process block place/break
-            let mut world = world.write().unwrap();
-
-            match action.action {
-                BlockActionType::Place(block_id) => {
-                    let _ = world.set_voxel(action.x, action.y, action.z, Some(block_id as usize));
-
-                    // TODO: Broadcast BlockChange to all clients
-                    info!("[Handler] '{}' placed block {} at ({},{},{})", username, block_id, action.x, action.y, action.z);
+            let block_global_id = match &action.action {
+                BlockActionType::Place(id) => {
+                    world.write().unwrap().set_voxel(action.x, action.y, action.z, Some(*id as usize));
+                    info!("[Handler] '{}' placed block {} at ({},{},{})", username, id, action.x, action.y, action.z);
+                    Some(*id as GlobalVoxelId)
                 }
                 BlockActionType::Break => {
-                    let _ = world.set_voxel(action.x, action.y, action.z, None);
-
-                    // TODO: Broadcast BlockChange to all clients
+                    world.write().unwrap().set_voxel(action.x, action.y, action.z, None);
                     info!("[Handler] '{}' broke block at ({},{},{})", username, action.x, action.y, action.z);
+                    None
                 }
+            };
+
+            // Send BlockChange packet back to client (and in future, to all clients)
+            let change_packet = Packet::new(PacketPayload::BlockChange(BlockChangePacket {
+                x: action.x,
+                y: action.y,
+                z: action.z,
+                block_id: block_global_id.unwrap_or(0),  // 0 = Air
+            }));
+
+            if let Err(e) = send_packet(stream, &change_packet).await {
+                error!("[Handler] Failed to send BlockChange: {}", e);
+                return Err(DisconnectReason::Error);
             }
         }
 
         PacketPayload::ChunkRequest(request) => {
-            // TODO: Send requested chunks to client
+            // Send requested chunks to client
             info!("[Handler] '{}' requested {} chunks", username, request.chunks.len());
+
+            for (cx, cy, cz) in &request.chunks {
+                // Try to get the chunk from the world
+                let chunk_data = {
+                    let world_lock = world.read().unwrap();
+                    world_lock.get_chunk_existing(*cx, *cy, *cz)
+                        .map(|chunk| chunk.to_bytes())
+                };
+
+                if let Some(data) = chunk_data {
+                    // Chunk exists, send it
+                    let chunk_packet = Packet::new(PacketPayload::ChunkData(ChunkDataPacket {
+                        cx: *cx,
+                        cy: *cy,
+                        cz: *cz,
+                        data,
+                    }));
+
+                    if let Err(e) = send_packet(stream, &chunk_packet).await {
+                        error!("[Handler] Failed to send chunk ({}, {}, {}): {}", cx, cy, cz, e);
+                        return Err(DisconnectReason::Error);
+                    }
+
+                    // Small yield to allow client to process
+                    tokio::task::yield_now().await;
+                } else {
+                    // Chunk doesn't exist yet - this is okay, client will handle it
+                    // In the future, we could queue chunk generation here
+                }
+            }
         }
 
         PacketPayload::ChatMessage(msg) => {
             // Broadcast chat message to all clients
-            info!("[Chat] '{}: {}'", username, msg.message);
+            info!("[Chat] '{}' sent: {}", username, msg.message);
 
-            // TODO: Implement chat broadcasting
+            // For now, send back as a ChatBroadcast to the sender
+            // TODO: Implement proper broadcasting to all connected clients
+            let broadcast = Packet::new(PacketPayload::ChatBroadcast(ChatBroadcastPacket {
+                player_id,
+                username: username.to_string(),
+                message: ChatMessage::text(&msg.message),
+            }));
+
+            info!("[Server -> Client] Chat broadcast to '{}': {}", username, msg.message);
+            if let Err(e) = send_packet(stream, &broadcast).await {
+                error!("[Handler] Failed to send chat broadcast: {}", e);
+                return Err(DisconnectReason::Error);
+            }
         }
 
         PacketPayload::CommandRequest(req) => {
@@ -405,8 +457,11 @@ where
             let response = Packet::new(PacketPayload::CommandResponse(CommandResponsePacket {
                 success: result.is_success(),
                 message: result.get_message().cloned().unwrap_or_else(|| ChatMessage::text("")),
+                action: result.get_action().cloned(),
             }));
 
+            info!("[Server -> Client] Command response to '{}': success={}, message={}",
+                username, result.is_success(), result.get_message().map(|m| m.plain_text()).unwrap_or_default());
             if let Err(e) = send_packet(stream, &response).await {
                 error!("[Handler] Failed to send command response: {}", e);
                 return Err(DisconnectReason::Error);
@@ -459,8 +514,8 @@ pub async fn receive_packet(stream: &mut TcpStream) -> Result<Packet, String> {
         .map_err(|e| format!("Failed to read length: {}", e))?;
     let len = u32::from_be_bytes(len_bytes) as usize;
 
-    // Sanity check
-    if len > 10_000_000 {
+    // Sanity check (increased to allow multiple chunks per packet)
+    if len > 50_000_000 {
         return Err("Packet too large".to_string());
     }
 

@@ -341,6 +341,54 @@ pub struct CommandRequestPacket {
     pub command: String,
 }
 
+/// Actions that the server can request the client to perform
+/// These are sent along with command responses when needed
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ClientAction {
+    /// Teleport the player to absolute coordinates
+    Teleport { x: f32, y: f32, z: f32 },
+    /// Teleport the player relatively
+    TeleportRelative { dx: f32, dy: f32, dz: f32 },
+    /// Change the player's game mode
+    SetGameMode { mode: GameModeData },
+    /// Toggle fly mode (only for creative)
+    ToggleFly,
+    /// Clear the chat history
+    ClearChat,
+}
+
+/// Game mode data for network transmission
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct GameModeData {
+    pub is_creative: bool,
+    pub fly_enabled: bool,
+}
+
+impl From<&crate::entities::GameMode> for GameModeData {
+    fn from(mode: &crate::entities::GameMode) -> Self {
+        match mode {
+            crate::entities::GameMode::Creative { fly_enabled } => GameModeData {
+                is_creative: true,
+                fly_enabled: *fly_enabled,
+            },
+            crate::entities::GameMode::Spectator => GameModeData {
+                is_creative: false,
+                fly_enabled: true,
+            },
+        }
+    }
+}
+
+impl From<GameModeData> for crate::entities::GameMode {
+    fn from(data: GameModeData) -> Self {
+        if data.is_creative {
+            crate::entities::GameMode::Creative { fly_enabled: data.fly_enabled }
+        } else {
+            crate::entities::GameMode::Spectator
+        }
+    }
+}
+
 /// Command Response: Server → Client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResponsePacket {
@@ -348,6 +396,8 @@ pub struct CommandResponsePacket {
     pub success: bool,
     /// The response message to display (JSON-serialized ChatMessage)
     pub message: ChatMessage,
+    /// Optional action for the client to perform
+    pub action: Option<ClientAction>,
 }
 
 // ============================================================================
